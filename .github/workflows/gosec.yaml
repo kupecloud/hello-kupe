@@ -14,4 +14,4 @@ on:
 
 jobs:
   go-security:
-    uses: kupecloud/github-workflows/.github/workflows/go-security.yaml@09fcdad22d0195c319ead621bb5320da422ee4ac
+    uses: kupecloud/github-workflows/.github/workflows/go-security.yaml@530d751e117f3a8451429d49e532a6df70b74432

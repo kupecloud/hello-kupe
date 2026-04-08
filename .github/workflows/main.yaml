@@ -41,7 +41,7 @@ jobs:
     needs:
       - gosec
       - helm-lint
-    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@09fcdad22d0195c319ead621bb5320da422ee4ac
+    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@530d751e117f3a8451429d49e532a6df70b74432
     permissions:
       contents: write
       issues: write
