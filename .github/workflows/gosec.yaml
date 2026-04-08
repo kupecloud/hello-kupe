@@ -1,0 +1,17 @@
+name: Go Security
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "go.mod"
+      - "**.go"
+      - ".github/workflows/gosec.yaml"
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_call:
+
+jobs:
+  go-security:
+    uses: kupecloud/github-workflows/.github/workflows/go-security.yaml@09fcdad22d0195c319ead621bb5320da422ee4ac

@@ -1,12 +1,12 @@
 name: Publish Image
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Semantic release version without the leading v
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -36,9 +36,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=main
             type=sha,prefix=sha-
-            type=ref,event=tag
+            type=raw,value=${{ inputs.version }}
+            type=raw,value=v${{ inputs.version }}
 
       - name: Build and push image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6

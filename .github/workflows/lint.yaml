@@ -1,0 +1,16 @@
+name: Lint
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "go.mod"
+      - "**.go"
+      - ".github/workflows/lint.yaml"
+      - "Makefile"
+  workflow_call:
+
+jobs:
+  lint:
+    uses: kupecloud/github-workflows/.github/workflows/go-lint.yaml@09fcdad22d0195c319ead621bb5320da422ee4ac

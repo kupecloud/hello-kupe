@@ -1,0 +1,16 @@
+name: Unit Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "go.mod"
+      - "**.go"
+      - ".github/workflows/unit-tests.yaml"
+      - "Makefile"
+  workflow_call:
+
+jobs:
+  unit-tests:
+    uses: kupecloud/github-workflows/.github/workflows/go-unit-tests.yaml@09fcdad22d0195c319ead621bb5320da422ee4ac
