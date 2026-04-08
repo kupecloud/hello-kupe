@@ -63,3 +63,9 @@ repos:
         language: system
         pass_filenames: false
         files: ^(cmd/|internal/|go\.mod|Dockerfile|Makefile)
+      - id: gosec
+        name: gosec
+        entry: bash -c 'GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...'
+        language: system
+        pass_filenames: false
+        files: ^(cmd/|internal/|go\.mod|Dockerfile|Makefile)

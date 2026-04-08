@@ -2,12 +2,13 @@ package app
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"log/slog"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"sort"
 	"strconv"
@@ -21,7 +22,6 @@ type Server struct {
 	startedAt     time.Time
 	template      *template.Template
 	logger        *slog.Logger
-	random        *rand.Rand
 	mu            sync.Mutex
 	requestCounts map[requestMetricKey]uint64
 	eventCounts   map[string]uint64
@@ -73,7 +73,6 @@ func NewServer(cfg Config, output io.Writer) (*Server, error) {
 		startedAt:     time.Now().UTC(),
 		template:      tpl,
 		logger:        slog.New(slog.NewJSONHandler(output, nil)),
-		random:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		requestCounts: make(map[requestMetricKey]uint64),
 		eventCounts:   make(map[string]uint64),
 	}, nil
@@ -107,16 +106,16 @@ func (a *Server) Run(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 
-		a.log(context.Background(), slog.LevelInfo, "service stopping",
+		a.log(shutdownCtx, slog.LevelInfo, "service stopping",
 			slog.String("service", a.cfg.ServiceName),
 			slog.String("tenant", a.cfg.Tenant),
 		)
 
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			a.log(context.Background(), slog.LevelError, "shutdown failed", slog.String("error", err.Error()))
+			a.log(shutdownCtx, slog.LevelError, "shutdown failed", slog.String("error", err.Error()))
 		}
 	}()
 
@@ -221,12 +220,12 @@ func (a *Server) backgroundLogger(ctx context.Context) {
 			return
 		case <-ticker.C:
 			i++
-			level := levels[a.random.Intn(len(levels))]
-			status := statuses[a.random.Intn(len(statuses))]
-			method := methods[a.random.Intn(len(methods))]
-			path := paths[a.random.Intn(len(paths))]
-			duration := a.random.Intn(500) + 1
-			user := users[a.random.Intn(len(users))]
+			level := levels[randomIndex(len(levels))]
+			status := statuses[randomIndex(len(statuses))]
+			method := methods[randomIndex(len(methods))]
+			path := paths[randomIndex(len(paths))]
+			duration := randomIndex(500) + 1
+			user := users[randomIndex(len(users))]
 
 			a.recordEvent(level.String())
 			a.log(ctx, level, fmt.Sprintf("%s %s", method, path),
@@ -340,4 +339,17 @@ func escapeLabelValue(value string) string {
 	value = strings.ReplaceAll(value, "\n", `\n`)
 	value = strings.ReplaceAll(value, `"`, `\"`)
 	return value
+}
+
+func randomIndex(limit int) int {
+	if limit <= 1 {
+		return 0
+	}
+
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(limit)))
+	if err != nil {
+		return 0
+	}
+
+	return int(n.Int64())
 }
