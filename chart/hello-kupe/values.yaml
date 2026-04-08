@@ -1,0 +1,35 @@
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+tenant: ""
+domain: kupe.cloud
+
+image:
+  repository: ghcr.io/kupecloud/hello-kupe
+  pullPolicy: IfNotPresent
+  tag: "main"
+
+service:
+  port: 8080
+
+httpRoute:
+  enabled: true
+  hostPrefix: hello-kupe
+  hostname: ""
+  gatewayName: external-gateway
+  gatewayNamespace: kube-system
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+podAnnotations:
+  k8s.grafana.com/scrape: "true"
+  k8s.grafana.com/metrics.path: "/metrics"
+  k8s.grafana.com/metrics.portNumber: "8080"
