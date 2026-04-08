@@ -11,7 +11,7 @@ LOG_INTERVAL_SECONDS ?= 5
 POD_NAME ?= local
 POD_NAMESPACE ?= default
 
-.PHONY: run build test fmt help
+.PHONY: run build test vuln fmt help
 
 run: ## Run hello-kupe locally with sensible defaults
 	SERVICE_NAME="$(SERVICE_NAME)" \
@@ -28,6 +28,9 @@ build: ## Build the hello-kupe binary
 
 test: ## Run Go tests
 	GOCACHE="$(GOCACHE)" $(GO) test ./...
+
+vuln: ## Run govulncheck against the codebase
+	GOCACHE="$(GOCACHE)" GOWORK=off $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
 fmt: ## Format Go code
 	GOCACHE="$(GOCACHE)" $(GO) fmt ./...

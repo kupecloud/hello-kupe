@@ -55,6 +55,8 @@ If you want a different hostname, set:
 
 This is useful when you want multiple demo deployments inside the same tenant.
 
+For local code checks, use `make test` and `make vuln`.
+
 ## Argo CD example
 
 ```yaml
