@@ -13,9 +13,14 @@ spec:
   hostnames:
     - {{ include "hello-kupe.hostname" . | quote }}
   rules:
+    # Expose only application paths — /metrics, /healthz, /readyz are
+    # internal-only (scraped by Alloy, probed by kubelet).
     - matches:
         - path:
             type: PathPrefix
+            value: /api
+        - path:
+            type: Exact
             value: /
       backendRefs:
         - name: {{ include "hello-kupe.fullname" . }}

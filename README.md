@@ -55,7 +55,8 @@ If you want a different hostname, set:
 
 This is useful when you want multiple demo deployments inside the same tenant.
 
-For local code checks, use `make test` and `make vuln`.
+For local code checks, use `make test`, `make gosec`, `make govulncheck`,
+and `make helm-lint`.
 
 ## Argo CD example
 

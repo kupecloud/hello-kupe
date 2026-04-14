@@ -11,7 +11,7 @@ LOG_INTERVAL_SECONDS ?= 5
 POD_NAME ?= local
 POD_NAMESPACE ?= default
 
-.PHONY: run build test sec vuln fmt help
+.PHONY: run build test gosec govulncheck helm-lint fmt help
 
 run: ## Run hello-kupe locally with sensible defaults
 	SERVICE_NAME="$(SERVICE_NAME)" \
@@ -29,11 +29,14 @@ build: ## Build the hello-kupe binary
 test: ## Run Go tests
 	GOCACHE="$(GOCACHE)" $(GO) test ./...
 
-sec: ## Run gosec against the codebase
+gosec: ## Run gosec against the codebase
 	GOCACHE="$(GOCACHE)" GOWORK=off $(GO) run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...
 
-vuln: ## Run govulncheck against the codebase
+govulncheck: ## Run govulncheck against the codebase
 	GOCACHE="$(GOCACHE)" GOWORK=off $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+helm-lint: ## Lint the Helm chart
+	helm lint ./chart/hello-kupe --set tenant=example-tenant
 
 fmt: ## Format Go code
 	GOCACHE="$(GOCACHE)" $(GO) fmt ./...
