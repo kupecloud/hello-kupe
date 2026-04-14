@@ -14,34 +14,37 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    name: Lint
-    uses: ./.github/workflows/lint.yaml
+  go-lint:
+    name: Go Lint
+    uses: ./.github/workflows/go-lint.yaml
+
+  action-lint:
+    name: Action Lint
+    uses: ./.github/workflows/action-lint.yaml
+
+  helm-lint:
+    name: Helm Lint
+    uses: ./.github/workflows/helm-lint.yaml
 
   unit-tests:
     name: Unit Tests
+    needs:
+      - go-lint
+      - action-lint
+      - helm-lint
     uses: ./.github/workflows/unit-tests.yaml
 
   gosec:
     name: Go Security
     needs:
-      - lint
       - unit-tests
     uses: ./.github/workflows/gosec.yaml
-
-  helm-lint:
-    name: Helm Lint
-    needs:
-      - lint
-      - unit-tests
-    uses: ./.github/workflows/helm-lint.yaml
 
   release:
     name: Release
     needs:
       - gosec
-      - helm-lint
-    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@530d751e117f3a8451429d49e532a6df70b74432
+    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@5f8c2a0126ce233053c56c04ca9a4d50f7f879b7
     permissions:
       contents: write
       issues: write
@@ -59,6 +62,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     with:
       version: ${{ needs.release.outputs.new_release_version }}
     secrets: inherit

@@ -1,15 +1,8 @@
 name: Go Security
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "go.mod"
-      - "**.go"
-      - ".github/workflows/gosec.yaml"
   workflow_call:
 
 jobs:
   go-security:
-    uses: kupecloud/github-workflows/.github/workflows/go-security.yaml@530d751e117f3a8451429d49e532a6df70b74432
+    uses: kupecloud/github-workflows/.github/workflows/go-security.yaml@5f8c2a0126ce233053c56c04ca9a4d50f7f879b7
