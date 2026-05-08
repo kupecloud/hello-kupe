@@ -44,7 +44,7 @@ jobs:
     name: Release
     needs:
       - gosec
-    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@689a05f5764fb1960bb7e127b27987acc9129dd4 # v1.12.1
+    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@56a9721ea10187892bc76c3c8885225990de8323 # v1.13.0
     permissions:
       contents: write
       issues: write

@@ -5,4 +5,4 @@ on:
 
 jobs:
   action-lint:
-    uses: kupecloud/github-workflows/.github/workflows/action-lint.yaml@689a05f5764fb1960bb7e127b27987acc9129dd4 # v1.12.1
+    uses: kupecloud/github-workflows/.github/workflows/action-lint.yaml@56a9721ea10187892bc76c3c8885225990de8323 # v1.13.0

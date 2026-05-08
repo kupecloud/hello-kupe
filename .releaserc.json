@@ -15,6 +15,21 @@
         "preset": "conventionalcommits"
       }
     ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "sed -i.bak 's/^version: .*/version: ${nextRelease.version}/' chart/Chart.yaml && sed -i.bak 's/^appVersion: .*/appVersion: \"${nextRelease.version}\"/' chart/Chart.yaml && rm chart/Chart.yaml.bak"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "chart/Chart.yaml"
+        ],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ],
     "@semantic-release/github"
   ]
 }
