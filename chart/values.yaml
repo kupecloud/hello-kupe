@@ -9,7 +9,10 @@ domain: kupe.cloud
 image:
   repository: ghcr.io/kupecloud/hello-kupe
   pullPolicy: IfNotPresent
-  tag: "main"
+  # Empty -> the deployment falls back to Chart.appVersion (the released
+  # image tag, kept in sync by semantic-release). Override only when
+  # testing a specific build.
+  tag: ""
 
 service:
   port: 8080

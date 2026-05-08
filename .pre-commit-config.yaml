@@ -12,7 +12,7 @@ repos:
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-yaml
-        exclude: ^chart/hello-kupe/templates/
+        exclude: ^chart/templates/
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
@@ -77,7 +77,7 @@ repos:
         files: ^(cmd/|internal/|go\.mod|Dockerfile|Makefile)
       - id: helm-lint
         name: helm lint
-        entry: bash -c 'helm lint chart/hello-kupe --set tenant=example-tenant'
+        entry: bash -c 'helm lint chart --set tenant=example-tenant'
         language: system
         pass_filenames: false
         files: ^chart/

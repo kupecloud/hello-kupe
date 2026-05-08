@@ -36,7 +36,7 @@ govulncheck: ## Run govulncheck against the codebase
 	GOCACHE="$(GOCACHE)" GOWORK=off $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
 helm-lint: ## Lint the Helm chart
-	helm lint ./chart/hello-kupe --set tenant=example-tenant
+	helm lint ./chart --set tenant=example-tenant
 
 fmt: ## Format Go code
 	GOCACHE="$(GOCACHE)" $(GO) fmt ./...

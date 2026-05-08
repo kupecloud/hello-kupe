@@ -31,13 +31,12 @@ after deploy.
 ## Repo layout
 
 * `cmd/hello-kupe` - the app
-* `chart/hello-kupe` - the Helm chart used by Argo CD and local
-  installs
+* `chart` - the Helm chart used by Argo CD and local installs
 
 ## Local chart install
 
 ```bash
-helm upgrade --install hello-kupe ./chart/hello-kupe \
+helm upgrade --install hello-kupe ./chart \
   --namespace hello-kupe \
   --create-namespace \
   --set tenant=<tenant>
@@ -71,7 +70,7 @@ spec:
   source:
     repoURL: https://github.com/kupecloud/hello-kupe.git
     targetRevision: main
-    path: chart/hello-kupe
+    path: chart
     helm:
       releaseName: hello-kupe
       values: |

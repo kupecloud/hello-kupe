@@ -17,6 +17,13 @@ spec:
       annotations:
         {{- toYaml .Values.podAnnotations | nindent 8 }}
     spec:
+      securityContext:
+        # Required by the platform's `platform-require-seccomp` Kyverno
+        # policy. Set at the pod level so every container in the pod
+        # inherits it; container-level securityContext (below) keeps the
+        # container-only fields like capability drop and read-only rootfs.
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: hello-kupe
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"

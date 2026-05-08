@@ -7,5 +7,5 @@ jobs:
   helm-lint:
     uses: kupecloud/github-workflows/.github/workflows/helm-lint.yaml@689a05f5764fb1960bb7e127b27987acc9129dd4 # v1.12.1
     with:
-      chart-path: chart/hello-kupe
+      chart-path: chart
       lint-args: --set tenant=example-tenant
