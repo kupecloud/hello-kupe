@@ -26,6 +26,5 @@ jobs:
     permissions:
       packages: write
     with:
-      runs-on: kupe-small
       retention_days: ${{ inputs.retention_days || 7 }}
       dry_run: ${{ inputs.dry_run || false }}
