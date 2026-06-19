@@ -4,6 +4,10 @@ nameOverride: ""
 fullnameOverride: ""
 
 tenant: ""
+# Cluster name — combined with tenant + domain to build the per-cluster
+# hostname `<hostPrefix>.<cluster>.<tenant>.clusters.<domain>` (B3.2 tenant DNS
+# zone). Required unless httpRoute.hostname is set explicitly.
+cluster: ""
 domain: kupe.cloud
 
 image:

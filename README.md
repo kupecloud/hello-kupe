@@ -39,12 +39,13 @@ after deploy.
 helm upgrade --install hello-kupe ./chart \
   --namespace hello-kupe \
   --create-namespace \
-  --set tenant=<tenant>
+  --set tenant=<tenant> \
+  --set cluster=<cluster>
 ```
 
 By default the chart creates an `HTTPRoute` for:
 
-`hello-kupe.<tenant>.kupe.cloud`
+`hello-kupe.<cluster>.<tenant>.clusters.kupe.cloud`
 
 If you want a different hostname, set:
 
@@ -75,6 +76,7 @@ spec:
       releaseName: hello-kupe
       values: |
         tenant: <tenant>
+        cluster: <cluster>
   destination:
     name: <tenant>-<cluster-slug>
     namespace: hello-kupe

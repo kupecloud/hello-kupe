@@ -32,6 +32,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- .Values.httpRoute.hostname -}}
 {{- else -}}
 {{- $tenant := required "A value for tenant is required when httpRoute.hostname is not set" .Values.tenant -}}
-{{- printf "%s.%s.%s" .Values.httpRoute.hostPrefix $tenant .Values.domain -}}
+{{- $cluster := required "A value for cluster is required when httpRoute.hostname is not set" .Values.cluster -}}
+{{- printf "%s.%s.%s.clusters.%s" .Values.httpRoute.hostPrefix $cluster $tenant .Values.domain -}}
 {{- end -}}
 {{- end -}}
