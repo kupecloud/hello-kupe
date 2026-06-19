@@ -28,7 +28,7 @@ func TestParsePositiveIntEnv(t *testing.T) {
 func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("SERVICE_NAME", "hello-kupe")
 	t.Setenv("TENANT", "acme")
-	t.Setenv("PUBLIC_URL", "https://hello-kupe.acme.kupe.cloud")
+	t.Setenv("PUBLIC_URL", "https://hello-kupe.prod.acme.clusters.kupe.cloud")
 	t.Setenv("POD_NAME", "hello-kupe-123")
 	t.Setenv("POD_NAMESPACE", "hello")
 	t.Setenv("PORT", "8081")
@@ -42,7 +42,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	if cfg.Tenant != "acme" {
 		t.Fatalf("expected tenant acme, got %q", cfg.Tenant)
 	}
-	if cfg.PublicURL != "https://hello-kupe.acme.kupe.cloud" {
+	if cfg.PublicURL != "https://hello-kupe.prod.acme.clusters.kupe.cloud" {
 		t.Fatalf("unexpected public url %q", cfg.PublicURL)
 	}
 	if cfg.Port != 8081 {
