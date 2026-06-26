@@ -173,7 +173,7 @@ func (a *Server) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(recorder, r)
 
 		duration := time.Since(started)
-		a.recordRequest(r.Method, r.URL.Path, recorder.status)
+		a.recordRequest(r.Method, routeLabel(r.URL.Path), recorder.status)
 
 		if r.URL.Path == "/metrics" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			return
@@ -246,6 +246,28 @@ func (a *Server) backgroundLogger(ctx context.Context) {
 			)
 		}
 	}
+}
+
+// knownRoutes is the fixed set of routes registered on the mux. The metric
+// path label is bounded to this set so that arbitrary client-supplied paths
+// (e.g. scanner traffic hitting "/wp-login.php") cannot mint new label sets.
+// Unbounded label cardinality leaks pod memory and explodes time series in the
+// shared metrics backend — bound the label to a known route template instead.
+var knownRoutes = map[string]struct{}{
+	"/":          {},
+	"/api/hello": {},
+	"/healthz":   {},
+	"/readyz":    {},
+	"/metrics":   {},
+}
+
+// routeLabel maps a raw request path to a bounded metric label. Known routes
+// keep their path; everything else collapses into a single "other" bucket.
+func routeLabel(path string) string {
+	if _, ok := knownRoutes[path]; ok {
+		return path
+	}
+	return "other"
 }
 
 func (a *Server) recordRequest(method, path string, status int) {
