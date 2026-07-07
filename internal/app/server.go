@@ -104,7 +104,14 @@ func (a *Server) Run(ctx context.Context) error {
 		slog.String("listen_addr", httpServer.Addr),
 	)
 
+	// done is closed once Shutdown has finished draining. ListenAndServe returns
+	// http.ErrServerClosed the instant Shutdown is *called*, not when it
+	// completes — so we must wait on done before returning, otherwise the process
+	// exits mid-drain and in-flight requests are killed (the 10s grace is then
+	// dead code).
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		<-ctx.Done()
 
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -122,9 +129,14 @@ func (a *Server) Run(ctx context.Context) error {
 
 	err := httpServer.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// A bind/listen failure means Shutdown will never be triggered by a
+		// clean stop; return immediately rather than block forever on done.
 		return fmt.Errorf("listen failed: %w", err)
 	}
 
+	// Clean stop: wait for the drain to finish before returning so the caller
+	// (and the process) doesn't exit while requests are still being served.
+	<-done
 	return nil
 }
 
