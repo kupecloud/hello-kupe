@@ -185,7 +185,7 @@ func (a *Server) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(recorder, r)
 
 		duration := time.Since(started)
-		a.recordRequest(r.Method, routeLabel(r.URL.Path), recorder.status)
+		a.recordRequest(methodLabel(r.Method), routeLabel(r.URL.Path), recorder.status)
 
 		if r.URL.Path == "/metrics" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			return
@@ -278,6 +278,32 @@ var knownRoutes = map[string]struct{}{
 func routeLabel(path string) string {
 	if _, ok := knownRoutes[path]; ok {
 		return path
+	}
+	return "other"
+}
+
+// knownMethods is the fixed set of HTTP verbs the metric method label is bounded
+// to. net/http accepts any RFC 7230 token as a method (e.g. `curl -X FOOBAR`),
+// so the raw method — like the path — must be collapsed to a bounded label or a
+// client looping over random methods mints unbounded time series and leaks pod
+// memory (same cardinality class as the path label).
+var knownMethods = map[string]struct{}{
+	http.MethodGet:     {},
+	http.MethodHead:    {},
+	http.MethodPost:    {},
+	http.MethodPut:     {},
+	http.MethodPatch:   {},
+	http.MethodDelete:  {},
+	http.MethodConnect: {},
+	http.MethodOptions: {},
+	http.MethodTrace:   {},
+}
+
+// methodLabel maps a raw request method to a bounded metric label. Known verbs
+// keep their name; everything else collapses into a single "other" bucket.
+func methodLabel(method string) string {
+	if _, ok := knownMethods[method]; ok {
+		return method
 	}
 	return "other"
 }

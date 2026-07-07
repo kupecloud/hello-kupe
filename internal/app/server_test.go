@@ -10,6 +10,29 @@ import (
 	"time"
 )
 
+func TestMethodLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{http.MethodGet, "GET"},
+		{http.MethodPost, "POST"},
+		{http.MethodDelete, "DELETE"},
+		{http.MethodOptions, "OPTIONS"},
+		{"FOOBAR1234", "other"},
+		{"", "other"},
+		{"get", "other"}, // case-sensitive: net/http normalises common verbs, unknown casing is bounded
+	}
+
+	for _, tt := range tests {
+		if got := methodLabel(tt.in); got != tt.want {
+			t.Errorf("methodLabel(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 // freePort returns a currently-free TCP port on the loopback interface.
 func freePort(t *testing.T) int {
 	t.Helper()
