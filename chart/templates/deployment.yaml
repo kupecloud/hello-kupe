@@ -16,7 +16,11 @@ spec:
         {{- include "hello-kupe.selectorLabels" . | nindent 8 }}
       annotations:
         {{- toYaml .Values.podAnnotations | nindent 8 }}
+        # Metrics scrape port tracks service.port so the two can't drift.
+        k8s.grafana.com/metrics.portNumber: {{ .Values.service.port | quote }}
     spec:
+      # The app never calls the Kubernetes API, so don't mount a SA token.
+      automountServiceAccountToken: false
       securityContext:
         # Required by the platform's `platform-require-seccomp` Kyverno
         # policy. Set at the pod level so every container in the pod

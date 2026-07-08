@@ -39,4 +39,5 @@ resources:
 podAnnotations:
   k8s.grafana.com/scrape: "true"
   k8s.grafana.com/metrics.path: "/metrics"
-  k8s.grafana.com/metrics.portNumber: "8080"
+  # metrics.portNumber is rendered from service.port in the deployment
+  # template so it can't drift from the container port.
