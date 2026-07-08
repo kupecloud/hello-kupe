@@ -6,7 +6,9 @@ on:
       - main
     paths:
       - "go.mod"
+      - "go.sum"
       - "**.go"
+      - "Dockerfile"
       - "chart/**"
       - ".github/workflows/**"
       - "Makefile"
