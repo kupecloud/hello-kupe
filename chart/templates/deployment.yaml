@@ -15,9 +15,12 @@ spec:
       labels:
         {{- include "hello-kupe.selectorLabels" . | nindent 8 }}
       annotations:
-        {{- toYaml .Values.podAnnotations | nindent 8 }}
         # Metrics scrape port tracks service.port so the two can't drift.
-        k8s.grafana.com/metrics.portNumber: {{ .Values.service.port | quote }}
+        # Merge it into podAnnotations (user values win) rather than
+        # appending a literal line, so an override of the same key can't
+        # produce a duplicate mapping key.
+        {{- $annotations := merge (deepCopy .Values.podAnnotations) (dict "k8s.grafana.com/metrics.portNumber" (.Values.service.port | toString)) }}
+        {{- toYaml $annotations | nindent 8 }}
     spec:
       # The app never calls the Kubernetes API, so don't mount a SA token.
       automountServiceAccountToken: false
