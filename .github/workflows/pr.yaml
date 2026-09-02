@@ -29,6 +29,22 @@ jobs:
     name: Helm Lint
     uses: ./.github/workflows/helm-lint.yaml
 
+  rbac-audit:
+    name: RBAC Secrets Audit
+    uses: kupecloud/github-workflows/.github/workflows/helm-rbac-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
+    with:
+      chart-path: chart
+      template-args: --set tenant=example-tenant --set cluster=example
+      release-name: hello-kupe
+
+  automount-audit:
+    name: Pod Automount Audit
+    uses: kupecloud/github-workflows/.github/workflows/helm-automount-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
+    with:
+      chart-path: chart
+      template-args: --set tenant=example-tenant --set cluster=example
+      release-name: hello-kupe
+
   unit-tests:
     name: Unit Tests
     needs:
