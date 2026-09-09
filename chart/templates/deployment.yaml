@@ -6,7 +6,17 @@ metadata:
   labels:
     {{- include "hello-kupe.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  {{- /*
+    With autoscaling enabled the `replicas` field is omitted ENTIRELY rather
+    than set to minReplicas. Under GitOps the rendered manifest is the desired
+    state: Argo CD with selfHeal would revert every scale event back to this
+    number within seconds, fight the HPA, and leave the app pinned at one
+    replica with no error anywhere. Omitting the field leaves replica count
+    unmanaged by the chart, which is what the HPA needs to own it.
+  */}}
   selector:
     matchLabels:
       {{- include "hello-kupe.selectorLabels" . | nindent 6 }}

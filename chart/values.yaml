@@ -36,6 +36,33 @@ resources:
     cpu: 100m
     memory: 128Mi
 
+# Horizontal autoscaling. OFF by default, so `replicaCount` governs and the
+# quickstart stays a single pod.
+#
+# When enabled the Deployment stops rendering `replicas` altogether and the
+# HPA owns the count — see the note in templates/deployment.yaml for why that
+# matters under GitOps.
+#
+# CPU utilisation is measured against `resources.requests.cpu`, and needs a
+# metrics API in the cluster. On Kupe that is already there: each tenant
+# vCluster proxies the platform's metrics-server, so `kubectl top` and a
+# CPU-based HPA work with nothing extra to install.
+#
+# The app's other endpoints cost tens of microseconds each, far too little to
+# move CPU utilisation. `GET /api/work?ms=N` burns N milliseconds of CPU per
+# request (default 50, capped at 1000) so autoscaling can be demonstrated and
+# tested with a realistic request rate.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  # Set to a percentage to add a memory target as well. Null means CPU only.
+  targetMemoryUtilizationPercentage: null
+  # Optional autoscaling/v2 `behavior` block: scale-up/scale-down policies and
+  # stabilisation windows. Empty means the Kubernetes defaults.
+  behavior: {}
+
 podAnnotations:
   k8s.grafana.com/scrape: "true"
   k8s.grafana.com/metrics.path: "/metrics"

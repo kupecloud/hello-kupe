@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,6 +84,7 @@ func (a *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", a.handleHome)
 	mux.HandleFunc("/api/hello", a.handleHello)
+	mux.HandleFunc("/api/work", a.handleWork)
 	mux.HandleFunc("/healthz", handleHealth)
 	mux.HandleFunc("/readyz", handleHealth)
 	mux.HandleFunc("/metrics", a.handleMetrics)
@@ -166,6 +168,81 @@ func (a *Server) handleHello(w http.ResponseWriter, r *http.Request) {
 		"request_path": r.URL.Path,
 		"timestamp":    time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// workDefaultMS is the CPU cost of a /api/work request that does not ask for
+// one; workMaxMS caps what a caller may ask for, so a single request cannot
+// occupy a core for an unbounded time.
+const (
+	workDefaultMS = 50
+	workMaxMS     = 1000
+)
+
+// handleWork burns CPU for roughly the requested number of milliseconds.
+//
+// It exists so a quickstart deployment can demonstrate horizontal
+// autoscaling: drive this endpoint and the pod's CPU rises until the
+// HorizontalPodAutoscaler adds replicas. The other endpoints are a JSON
+// marshal each (tens of microseconds), so no achievable request rate moves
+// CPU utilisation far enough for an HPA to react.
+//
+// `?ms=` selects the cost per request, default 50 and capped at workMaxMS.
+func (a *Server) handleWork(w http.ResponseWriter, r *http.Request) {
+	budgetMS := workDefaultMS
+	if raw := r.URL.Query().Get("ms"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "ms must be a non-negative integer",
+				"max":   workMaxMS,
+			})
+			return
+		}
+		budgetMS = parsed
+	}
+	capped := budgetMS > workMaxMS
+	if capped {
+		budgetMS = workMaxMS
+	}
+
+	started := time.Now()
+	rounds := burnCPU(r.Context(), time.Duration(budgetMS)*time.Millisecond)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"service":      a.cfg.ServiceName,
+		"tenant":       a.cfg.Tenant,
+		"pod":          a.cfg.PodName,
+		"namespace":    a.cfg.PodNamespace,
+		"requested_ms": budgetMS,
+		"capped":       capped,
+		"elapsed_ms":   time.Since(started).Milliseconds(),
+		"rounds":       rounds,
+	})
+}
+
+// burnCPU hashes until the budget is spent and returns the rounds completed.
+//
+// Real work, not a sleep: a sleeping goroutine consumes no CPU, so an HPA
+// scaling on CPU utilisation would never see it. Each digest is fed back into
+// the next round so the compiler cannot elide the loop, and the clock is read
+// once per checkEvery rounds because time.Now() would otherwise dominate it.
+func burnCPU(ctx context.Context, budget time.Duration) uint64 {
+	if budget <= 0 {
+		return 0
+	}
+	const checkEvery = 64
+	deadline := time.Now().Add(budget)
+	buf := make([]byte, sha256.Size)
+	var rounds uint64
+	for {
+		for i := 0; i < checkEvery; i++ {
+			sum := sha256.Sum256(buf)
+			copy(buf, sum[:])
+		}
+		rounds += checkEvery
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return rounds
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
