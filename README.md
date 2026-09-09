@@ -128,7 +128,16 @@ spec:
         tenant: <tenant>
         cluster: <cluster>
   destination:
-    name: <tenant>-<cluster-slug>
+    # Argo CD matches destination.name EXACTLY against the cluster registration
+    # the platform creates for you. The format is
+    # `<tenant>--<cluster>-<suffix>`: a DOUBLE hyphen between tenant and
+    # cluster, then a short hash suffix derived from the cluster's UID. Do not
+    # guess it and do not use the API server URL — copy the exact value from
+    # Argo CD under Settings -> Clusters (open Argo CD from the app switcher in
+    # console.kupe.cloud, or at https://argocd.kupe.cloud). Your tenant role
+    # only lists your own clusters there, so every entry you see is safe to
+    # copy as-is.
+    name: <tenant>--<cluster>-<suffix>
     namespace: hello-kupe
   syncPolicy:
     automated:
