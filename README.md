@@ -4,16 +4,101 @@
 
 <!-- toc -->
 
+* [Deploy it](#deploy-it)
+  * [Or install the chart directly](#or-install-the-chart-directly)
 * [Overview](#overview)
   * [Endpoints](#endpoints)
 * [Autoscaling](#autoscaling)
 * [Repo layout](#repo-layout)
-* [Local chart install](#local-chart-install)
-* [Argo CD example](#argo-cd-example)
+* [Local development](#local-development)
 
 <!-- Regenerate with "pre-commit run -a markdown-toc" -->
 
 <!-- tocstop -->
+
+## Deploy it
+
+The fastest route needs nothing installed locally and no clone. Apply one
+`Application` into the `argocd` namespace of your Kupe cluster, and the platform
+deploys this repo for you.
+
+```yaml
+# hello-kupe.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-kupe
+  namespace: argocd
+spec:
+  project: <tenant>
+  source:
+    repoURL: https://github.com/kupecloud/hello-kupe.git
+    targetRevision: main
+    path: chart
+    helm:
+      releaseName: hello-kupe
+      values: |
+        tenant: <tenant>
+        cluster: <cluster>
+  destination:
+    name: <tenant>--<cluster>-<suffix>
+    namespace: hello-kupe
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+```
+
+```bash
+kubectl apply -f hello-kupe.yaml
+```
+
+**`destination.name` is the one value you cannot type from memory.** The `<suffix>`
+is derived from your cluster's internal ID. Open Argo CD (the grid icon in the Kupe
+console, or `argocd.kupe.cloud`), go to **Settings → Clusters**, and copy the name
+exactly. Only your own clusters are listed, so anything you see there is safe to
+copy.
+
+Then open the app:
+
+```text
+https://hello-kupe.<cluster>.<tenant>.clusters.kupe.cloud
+```
+
+Two things about this route that surprise people:
+
+- **`kubectl get application -n argocd` shows a blank status forever.** The
+  `Application` is exported up to the platform's Argo CD, and the status is not
+  copied back down. Check `kubectl get deploy,pods -n hello-kupe` instead, or look
+  at the app in Argo CD.
+- **`spec.project` is overwritten** with your tenant name whatever you put in it.
+  That is the platform pinning the application to your own project.
+
+Full walkthrough, including how to find your tenant and cluster names:
+[Deploy your first app](https://docs.kupe.cloud/get-started/deploy-an-app/).
+
+### Or install the chart directly
+
+Useful when you are changing the chart itself. This one does need the repo cloned,
+because the chart is not published to a registry:
+
+```bash
+helm upgrade --install hello-kupe ./chart \
+  --namespace hello-kupe \
+  --create-namespace \
+  --set tenant=<tenant> \
+  --set cluster=<cluster>
+```
+
+`tenant` and `cluster` only build the hostname and the page content; set `domain`
+too if your platform is not on `kupe.cloud`. For a second copy in the same tenant,
+override the hostname:
+
+```bash
+--set httpRoute.hostname=my-app.example.com
+```
 
 ## Overview
 
@@ -36,7 +121,7 @@ after deploy.
 
 | Path | What it does |
 | --- | --- |
-| `/` | HTML page naming the tenant, cluster and pod serving it |
+| `/` | HTML page naming the tenant, pod, and namespace serving it |
 | `/api/hello` | the same as JSON |
 | `/api/work?ms=N` | burns roughly N milliseconds of CPU (default 50, capped at 1000) |
 | `/healthz`, `/readyz` | probes |
@@ -67,7 +152,8 @@ would move CPU utilisation:
 
 ```bash
 # ~3 requests/sec per pod is enough to pass a 70% target at 250m
-hey -z 5m -q 4 -c 20 https://hello-kupe.<cluster>.<tenant>.clusters.kupe.cloud/api/work?ms=50
+# Quote the URL: in zsh the `?` is a glob character and the command dies before it runs.
+hey -z 5m -q 4 -c 20 "https://hello-kupe.<cluster>.<tenant>.clusters.kupe.cloud/api/work?ms=50"
 kubectl get hpa hello-kupe -w
 ```
 
@@ -83,66 +169,7 @@ quota is reached, whatever `maxReplicas` says.
 * `cmd/hello-kupe` - the app
 * `chart` - the Helm chart used by Argo CD and local installs
 
-## Local chart install
-
-```bash
-helm upgrade --install hello-kupe ./chart \
-  --namespace hello-kupe \
-  --create-namespace \
-  --set tenant=<tenant> \
-  --set cluster=<cluster>
-```
-
-By default the chart creates an `HTTPRoute` for:
-
-`hello-kupe.<cluster>.<tenant>.clusters.kupe.cloud`
-
-If you want a different hostname, set:
-
-```bash
---set httpRoute.hostname=my-app.example.com
-```
-
-This is useful when you want multiple demo deployments inside the same tenant.
+## Local development
 
 For local code checks, use `make test`, `make gosec`, `make govulncheck`,
 and `make helm-lint`.
-
-## Argo CD example
-
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: hello-kupe
-  namespace: argocd
-spec:
-  project: <tenant>
-  source:
-    repoURL: https://github.com/kupecloud/hello-kupe.git
-    targetRevision: main
-    path: chart
-    helm:
-      releaseName: hello-kupe
-      values: |
-        tenant: <tenant>
-        cluster: <cluster>
-  destination:
-    # Argo CD matches destination.name EXACTLY against the cluster registration
-    # the platform creates for you. The format is
-    # `<tenant>--<cluster>-<suffix>`: a DOUBLE hyphen between tenant and
-    # cluster, then a short hash suffix derived from the cluster's UID. Do not
-    # guess it and do not use the API server URL — copy the exact value from
-    # Argo CD under Settings -> Clusters (open Argo CD from the app switcher in
-    # console.kupe.cloud, or at https://argocd.kupe.cloud). Your tenant role
-    # only lists your own clusters there, so every entry you see is safe to
-    # copy as-is.
-    name: <tenant>--<cluster>-<suffix>
-    namespace: hello-kupe
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-```
