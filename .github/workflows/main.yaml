@@ -60,30 +60,56 @@ jobs:
       - unit-tests
     uses: ./.github/workflows/gosec.yaml
 
-  release:
-    name: Release
+  # Build BEFORE releasing so the release commit (the one the git tag points at,
+  # and the one tenants install from) can carry the image digest:
+  #   version (dry run) -> publish-image (build/push/sign) -> release (stamps
+  #   tag@digest into chart/values.yaml, then tags).
+  #
+  # Why this chart needs it at all: the platform's verify-platform-images
+  # ImageValidatingPolicy denies any ghcr.io/kupecloud/* pod whose image has no
+  # digest — a cosign signature is bound to a digest, so a bare tag is
+  # unverifiable. The vCluster syncer hits that denial when it creates the host
+  # twin of a tenant's pod, and the tenant only sees a pod stuck Pending.
+  #
+  # A failure after publish-image leaves an image that no git tag points at; the
+  # next run computes the same version and overwrites it.
+  version:
+    name: Version
     needs:
       - gosec
       - rbac-audit
-    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
+    uses: kupecloud/github-workflows/.github/workflows/semantic-release-preview.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
     permissions:
       contents: write
-      issues: write
-      pull-requests: write
-      packages: write
-      id-token: write
     secrets: inherit
 
   publish-image:
     name: Publish Image
     needs:
-      - release
-    if: needs.release.outputs.new_release_published == 'true'
+      - version
+    if: needs.version.outputs.new_release_published == 'true'
     uses: ./.github/workflows/publish-image.yaml
     permissions:
       contents: read
       packages: write
       id-token: write
     with:
-      version: ${{ needs.release.outputs.new_release_version }}
+      version: ${{ needs.version.outputs.new_release_version }}
+    secrets: inherit
+
+  release:
+    name: Release
+    needs:
+      - version
+      - publish-image
+    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    with:
+      image-digest: ${{ needs.publish-image.outputs.digest }}
+      image-version: ${{ needs.version.outputs.new_release_version }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      packages: write
+      id-token: write
     secrets: inherit

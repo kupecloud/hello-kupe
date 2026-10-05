@@ -7,6 +7,10 @@ on:
         description: Semantic release version without the leading v
         required: true
         type: string
+    outputs:
+      digest:
+        description: Digest of the pushed, signed image (stamped into the release commit)
+        value: ${{ jobs.publish.outputs.digest }}
 
 permissions:
   contents: read
@@ -15,7 +19,7 @@ permissions:
 
 jobs:
   publish:
-    uses: kupecloud/github-workflows/.github/workflows/publish-image.yaml@6c631aa5e3dc896ff8bf5cf5244df96e219fbe6f # v2.5.2
+    uses: kupecloud/github-workflows/.github/workflows/publish-image.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
     with:
       version: ${{ inputs.version }}
     secrets: inherit

@@ -18,14 +18,15 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "sed -i.bak 's/^version: .*/version: ${nextRelease.version}/' chart/Chart.yaml && sed -i.bak 's/^appVersion: .*/appVersion: \"${nextRelease.version}\"/' chart/Chart.yaml && rm chart/Chart.yaml.bak"
+        "prepareCmd": "test -n \"$IMAGE_DIGEST\" && test \"$IMAGE_VERSION\" = \"${nextRelease.version}\" && sed -i -E 's|^version: .*|version: ${nextRelease.version}|' chart/Chart.yaml && sed -i -E 's|^appVersion: .*|appVersion: \"${nextRelease.version}\"|' chart/Chart.yaml && sed -i -E '/^image:/,/^[a-zA-Z]/ s|^([[:space:]]+)tag: .*|\\1tag: \"${nextRelease.version}@'\"$IMAGE_DIGEST\"'\"|' chart/values.yaml"
       }
     ],
     [
       "@semantic-release/git",
       {
         "assets": [
-          "chart/Chart.yaml"
+          "chart/Chart.yaml",
+          "chart/values.yaml"
         ],
         "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }

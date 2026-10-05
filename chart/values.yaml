@@ -13,9 +13,20 @@ domain: kupe.cloud
 image:
   repository: ghcr.io/kupecloud/hello-kupe
   pullPolicy: IfNotPresent
-  # Empty -> the deployment falls back to Chart.appVersion (the released
-  # image tag, kept in sync by semantic-release). Override only when
-  # testing a specific build.
+  # Pinned to version AND digest ("X.Y.Z@sha256:..."). Written by the release
+  # itself, never by hand: main.yaml builds and signs the image BEFORE
+  # semantic-release, and .releaserc.json's prepareCmd stamps tag@digest into
+  # this line in the release commit. The template renders repository:tag, so
+  # the pod runs exactly the signed digest even if the tag is re-pushed later.
+  #
+  # The digest is NOT cosmetic. The platform's verify-platform-images policy
+  # denies any ghcr.io/kupecloud/* pod without one (a cosign signature is bound
+  # to a digest, so a bare tag cannot be verified). Overriding this with a plain
+  # tag — `--set image.tag=X.Y.Z` — makes the pod unschedulable on a Kupe
+  # cluster, and the only visible symptom is a pod stuck Pending.
+  #
+  # Empty falls back to Chart.appVersion, which is a bare tag: fine on a dev
+  # estate (image verification runs in Audit there), denied on prod.
   tag: ""
 
 service:
