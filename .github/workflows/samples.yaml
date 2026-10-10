@@ -1,0 +1,102 @@
+name: Samples
+
+# Checks for samples/managed-database, a Go module of its own. The shared Go
+# workflows run from the repository root and have no working-directory input,
+# so the Go checks run here with the same tools and versions they use. The
+# Node and Helm checks use the shared workflows, which take a path.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  managed-database-go:
+    name: managed-database Go
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: samples/managed-database
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: samples/managed-database/go.mod
+          cache-dependency-path: samples/managed-database/go.sum
+
+      - name: Check go mod tidy
+        run: go mod tidy -diff
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run unit tests
+        run: go test -race -timeout 120s ./...
+
+      # The shared go-lint workflow lints with this config when a repo has
+      # none of its own. It is pinned to the same github-workflows commit as
+      # the Node and Helm jobs below.
+      - name: Run golangci-lint
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/golangci.yaml" \
+            https://raw.githubusercontent.com/kupecloud/github-workflows/9e4df7e450d89d7f2efdd1997691cbd59ef26002/golangci-default.yaml
+          go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 \
+            run --timeout=10m --config "$RUNNER_TEMP/golangci.yaml" ./...
+
+      - name: Run gosec
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  managed-database-web-test:
+    name: managed-database web tests
+    uses: kupecloud/github-workflows/.github/workflows/node-unit-tests.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    with:
+      working-directory: samples/managed-database/web
+      upload-coverage: false
+
+  # npm run build is `tsc && vite build`, so this also type-checks.
+  managed-database-web-build:
+    name: managed-database web build
+    uses: kupecloud/github-workflows/.github/workflows/node-build.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    with:
+      working-directory: samples/managed-database/web
+
+  managed-database-helm-lint:
+    name: managed-database Helm lint
+    uses: kupecloud/github-workflows/.github/workflows/helm-lint.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    with:
+      chart-path: samples/managed-database/chart
+      lint-args: >-
+        --set tenant=example-tenant --set cluster=example
+        --set api.image.repository=ghcr.io/example/todo-api --set api.image.tag=0.1.0
+        --set web.image.repository=ghcr.io/example/todo-web --set web.image.tag=0.1.0
+
+  managed-database-images:
+    name: managed-database image ${{ matrix.dockerfile }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile:
+          - Dockerfile.api
+          - Dockerfile.web
+    defaults:
+      run:
+        working-directory: samples/managed-database
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Build only. The sample images are never pushed from this repository.
+      - name: Build image
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: docker build -f "$DOCKERFILE" .

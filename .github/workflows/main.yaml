@@ -60,6 +60,12 @@ jobs:
       - unit-tests
     uses: ./.github/workflows/gosec.yaml
 
+  # Not a dependency of version/release: a broken sample must not hold back a
+  # hello-kupe release, and sample-only commits never cut one.
+  samples:
+    name: Samples
+    uses: ./.github/workflows/samples.yaml
+
   # Build BEFORE releasing so the release commit (the one the git tag points at,
   # and the one tenants install from) can carry the image digest:
   #   version (dry run) -> publish-image (build/push/sign) -> release (stamps

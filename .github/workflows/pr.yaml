@@ -12,6 +12,7 @@ on:
       - "chart/**"
       - ".github/workflows/**"
       - "Makefile"
+      - "samples/**"
 
 permissions:
   contents: read
@@ -52,3 +53,7 @@ jobs:
       - action-lint
       - helm-lint
     uses: ./.github/workflows/unit-tests.yaml
+
+  samples:
+    name: Samples
+    uses: ./.github/workflows/samples.yaml
