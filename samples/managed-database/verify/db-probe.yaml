@@ -1,0 +1,37 @@
+# Tries a TCP connection to the database from whichever namespace it is
+# applied to, then exits: Succeeded means the port answered, Failed means it
+# did not within 5 seconds. It dials the app binding's Service in api, so in
+# web the name resolves but the connection is dropped.
+#
+#   kubectl -n api apply -f verify/db-probe.yaml   # expect Succeeded
+#   kubectl -n web apply -f verify/db-probe.yaml   # expect Failed
+apiVersion: v1
+kind: Pod
+metadata:
+  name: db-probe
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+      command: ["nc", "-z", "-w", "5", "todo-db.api.svc.cluster.local", "5432"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 10m
+          memory: 8Mi
+        limits:
+          cpu: 50m
+          memory: 16Mi

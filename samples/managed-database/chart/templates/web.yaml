@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-web
+  namespace: {{ .Values.web.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "todo.selectorLabels" (dict "root" $ "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "todo.selectorLabels" (dict "root" $ "component" "web") | nindent 8 }}
+    spec:
+      # No Secret volume and no database settings: this namespace has no
+      # binding, so there is nothing to mount.
+      serviceAccountName: todo-web
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "todo.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: web
+          image: {{ include "todo.image" (dict "name" "web" "image" .Values.web.image) | quote }}
+          imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+          # Endpoints and the gateway take a moment to drop a terminating pod.
+          # Waiting before SIGTERM lets requests already routed here finish
+          # instead of hitting a closed port. The images have no shell, so
+          # this uses the kubelet's built-in sleep.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            {{- include "todo.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-web
+  namespace: {{ .Values.web.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "web") | nindent 4 }}
+spec:
+  selector:
+    {{- include "todo.selectorLabels" (dict "root" $ "component" "web") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+{{- if .Values.httpRoute.enabled }}
+---
+# Same hostname as the API route. The gateway sends /api to the api
+# namespace (longest prefix wins) and everything else here, so the browser
+# calls the API on its own origin.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: todo-web
+  namespace: {{ .Values.web.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "web") | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.httpRoute.gatewayName }}
+      namespace: {{ .Values.httpRoute.gatewayNamespace }}
+  hostnames:
+    - {{ include "todo.hostname" . | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: todo-web
+          port: 80
+{{- end }}

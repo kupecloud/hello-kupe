@@ -168,6 +168,8 @@ quota is reached, whatever `maxReplicas` says.
 
 * `cmd/hello-kupe` - the app
 * `chart` - the Helm chart used by Argo CD and local installs
+* `samples/managed-database` - a Go API, migration Job and React frontend using
+  a Kupe managed PostgreSQL database
 
 ## Local development
 

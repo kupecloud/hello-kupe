@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-api
+  namespace: {{ .Values.api.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "todo.selectorLabels" (dict "root" $ "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "todo.selectorLabels" (dict "root" $ "component" "api") | nindent 8 }}
+    spec:
+      serviceAccountName: todo-api
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "todo.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "todo.image" (dict "name" "api" "image" .Values.api.image) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+            {{- include "todo.bindingEnv" (dict "root" $ "secretName" .Values.database.appSecretName) | nindent 12 }}
+          volumeMounts:
+            {{- include "todo.bindingMount" (dict "root" $ "secretName" .Values.database.appSecretName) | nindent 12 }}
+          # Endpoints and the gateway take a moment to drop a terminating pod.
+          # Waiting before SIGTERM lets requests already routed here finish
+          # instead of hitting a closed port. The images have no shell, so
+          # this uses the kubelet's built-in sleep.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          # Liveness does not touch the database, so an outage takes pods out
+          # of the Service (readiness) instead of restarting them.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            {{- include "todo.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+      volumes:
+        {{- /* The APP binding: reads and writes rows, cannot change the schema. */}}
+        {{- include "todo.bindingVolume" (dict "root" $ "secretName" .Values.database.appSecretName) | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-api
+  namespace: {{ .Values.api.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  selector:
+    {{- include "todo.selectorLabels" (dict "root" $ "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+{{- if .Values.httpRoute.enabled }}
+---
+# Only /api is public. /healthz and /readyz stay inside the cluster.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: todo-api
+  namespace: {{ .Values.api.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.httpRoute.gatewayName }}
+      namespace: {{ .Values.httpRoute.gatewayNamespace }}
+  hostnames:
+    - {{ include "todo.hostname" . | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: todo-api
+          port: 80
+{{- end }}

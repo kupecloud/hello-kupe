@@ -1,0 +1,64 @@
+{{- if .Values.migrations.enabled }}
+{{- /*
+Runs as a pre-install/pre-upgrade hook, so the schema is in place before the
+API rolls out. Argo CD runs Helm hooks as PreSync hooks. before-hook-creation
+replaces the previous Job on each run and keeps the last one for its logs.
+
+The Job and its ServiceAccount live in migrations.namespace, where the owner
+binding delivers its Secret. The API's namespace only ever holds the app
+role's Secret.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: todo-migrate
+  namespace: {{ .Values.migrations.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: todo-migrate
+  namespace: {{ .Values.migrations.namespace }}
+  labels:
+    {{- include "todo.labels" (dict "root" $ "component" "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "todo.selectorLabels" (dict "root" $ "component" "migrate") | nindent 8 }}
+    spec:
+      serviceAccountName: todo-migrate
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        {{- include "todo.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "todo.image" (dict "name" "api" "image" .Values.api.image) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          args: ["migrate"]
+          env:
+            {{- include "todo.bindingEnv" (dict "root" $ "secretName" .Values.database.ownerSecretName) | nindent 12 }}
+          volumeMounts:
+            {{- include "todo.bindingMount" (dict "root" $ "secretName" .Values.database.ownerSecretName) | nindent 12 }}
+          securityContext:
+            {{- include "todo.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+      volumes:
+        {{- /* The OWNER binding: the only workload that can change the schema. */}}
+        {{- include "todo.bindingVolume" (dict "root" $ "secretName" .Values.database.ownerSecretName) | nindent 8 }}
+{{- end }}

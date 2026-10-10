@@ -13,7 +13,7 @@ repos:
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-yaml
-        exclude: ^chart/templates/
+        exclude: ^(samples/[^/]+/)?chart/templates/
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
@@ -34,12 +34,14 @@ repos:
     rev: 3766ad839ad3a74558031510b3bc9872bb1d9980
     hooks:
       - id: markdownlint-cli2
-        files: ^README\.md$
+        files: ^(samples/[^/]+/)?README\.md$
 
   - repo: https://github.com/codespell-project/codespell
     rev: 2ccb47ff45ad361a21071a7eedda4c37e6ae8c5a
     hooks:
       - id: codespell
+        # Lockfile integrity hashes are base64 and trip the dictionary.
+        exclude: package-lock\.json$
         args:
           - --write-changes
 
@@ -49,6 +51,12 @@ repos:
       - id: golangci-lint
         args:
           - --timeout=10m
+      # The sample is a Go module of its own, which a run from the root skips.
+      - id: golangci-lint
+        alias: golangci-lint-sample
+        name: golangci-lint (managed-database sample)
+        entry: bash -c 'cd samples/managed-database && golangci-lint run --timeout=10m ./...'
+        files: ^samples/managed-database/
 
   - repo: local
     hooks:
@@ -82,6 +90,24 @@ repos:
         language: system
         pass_filenames: false
         files: ^chart/
+      - id: govulncheck-sample
+        name: govulncheck (managed-database sample)
+        entry: bash -c 'cd samples/managed-database && GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...'
+        language: system
+        pass_filenames: false
+        files: ^samples/managed-database/(cmd/|internal/|go\.(mod|sum)$|Dockerfile)
+      - id: gosec-sample
+        name: gosec (managed-database sample)
+        entry: bash -c 'cd samples/managed-database && GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...'
+        language: system
+        pass_filenames: false
+        files: ^samples/managed-database/(cmd/|internal/|go\.(mod|sum)$|Dockerfile)
+      - id: helm-lint-sample
+        name: helm lint (managed-database sample)
+        entry: bash -c 'cd samples/managed-database && make helm-lint'
+        language: system
+        pass_filenames: false
+        files: ^samples/managed-database/chart/
 
   # Refuse any commit whose STAGED content contains a secret. Added org-wide on
   # 2026-10-06 after three OpenTofu state files carrying a dev SSH private key

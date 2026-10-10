@@ -1,0 +1,77 @@
+# Tenant and cluster build the public hostname
+# `<httpRoute.hostPrefix>.<cluster>.<tenant>.clusters.<domain>`. Required
+# unless httpRoute.hostname is set.
+tenant: ""
+cluster: ""
+domain: kupe.cloud
+
+httpRoute:
+  enabled: true
+  hostPrefix: todo
+  hostname: ""
+  gatewayName: external-gateway
+  gatewayNamespace: kube-system
+
+# The binding Secrets Kupe delivers: the app role's into api.namespace, the
+# owner role's into migrations.namespace. These are the defaults for a
+# database named `todo-db` (`{database}-{role}`); change them if the database
+# has another name or the bindings set `secret_name`.
+database:
+  appSecretName: todo-db-app
+  ownerSecretName: todo-db-owner
+
+# Where binding Secrets are mounted, following servicebinding.io. Each
+# workload mounts exactly one Secret, at <bindingRoot>/<secret name>.
+bindingRoot: /bindings
+
+api:
+  namespace: api
+  replicaCount: 1
+  # One image runs the API and the migration. Build it from Dockerfile.api
+  # and push it to a registry your cluster can pull from. A tag of the form
+  # "X.Y.Z@sha256:..." pins the exact build.
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# The migration runs before every install and upgrade (a Helm hook, which
+# Argo CD runs as a PreSync hook), with the owner role. Re-running it is safe:
+# applied migrations are skipped. It runs in its own namespace, the one the
+# owner binding targets, so no pod in api.namespace can mount the owner
+# Secret.
+migrations:
+  enabled: true
+  namespace: todo-migrate
+  backoffLimit: 6
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+web:
+  namespace: web
+  replicaCount: 1
+  # Build from Dockerfile.web.
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

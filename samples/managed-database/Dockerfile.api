@@ -1,0 +1,36 @@
+# Build from samples/managed-database:
+#   docker build -f Dockerfile.api -t <registry>/todo-api:<version> .
+#
+# One image runs both the API ("serve", the default) and the schema
+# migration ("migrate"). The migrations are embedded in the binary, so the
+# schema a Job applies always matches the code that reads it.
+
+# Must be >= the `go` directive in go.mod: this image sets GOTOOLCHAIN=local,
+# so an older builder fails with "go.mod requires go >= X".
+FROM golang:1.26.9-alpine3.23@sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888 AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/todo-api ./cmd/todo-api
+
+# Runtime stage: distroless for minimal attack surface, running as nonroot.
+FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
+
+WORKDIR /
+
+COPY --from=builder /out/todo-api /todo-api
+
+EXPOSE 8080
+
+ENTRYPOINT ["/todo-api"]
+CMD ["serve"]

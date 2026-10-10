@@ -1,0 +1,6 @@
+apiVersion: v2
+name: todo
+description: Managed database sample for Kupe Cloud. A Go API, its migration Job and a React frontend, each in its own namespace.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

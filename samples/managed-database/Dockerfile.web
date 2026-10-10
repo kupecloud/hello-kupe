@@ -1,0 +1,42 @@
+# Build from samples/managed-database:
+#   docker build -f Dockerfile.web -t <registry>/todo-web:<version> .
+#
+# The React app is compiled to static files and served by a small Go file
+# server. The image holds no credentials and no API address: the browser
+# calls /api on the same host, and the HTTPRoute sends that to the API.
+
+FROM node:24.21.0-alpine3.23@sha256:9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2 AS frontend
+
+WORKDIR /web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
+
+# Must be >= the `go` directive in go.mod: this image sets GOTOOLCHAIN=local.
+FROM golang:1.26.9-alpine3.23@sha256:96123126ac58e910f4dd3619a8901e2fb6d1ad84b59b1232cac7c9ea65a8f888 AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+COPY cmd/todo-web ./cmd/todo-web
+COPY internal/static ./internal/static
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/todo-web ./cmd/todo-web
+
+FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
+
+WORKDIR /
+
+COPY --from=builder /out/todo-web /todo-web
+COPY --from=frontend /web/dist /www
+
+EXPOSE 8080
+
+ENTRYPOINT ["/todo-web"]
