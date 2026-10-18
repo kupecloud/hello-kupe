@@ -304,7 +304,7 @@ What the platform guarantees for this layout:
   binding.
 * **Three roles, none a superuser.** `app_readwrite` can read and write rows in
   tables the owner creates, and `app_readonly` can only read them. Neither can
-  create, alter or drop tables: `CREATE TABLE` fails with
+  create, alter or drop the owner's tables: `CREATE TABLE` fails with
   `permission denied for schema public`.
 
 What it does not separate:
