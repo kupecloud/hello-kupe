@@ -18,6 +18,8 @@ SQL
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname todo_db <<'SQL'
 CREATE ROLE app_readwrite NOLOGIN NOINHERIT;
 CREATE ROLE app_readonly NOLOGIN NOINHERIT;
+REVOKE EXECUTE ON FUNCTION pg_catalog.lo_create(oid), pg_catalog.lo_creat(integer), pg_catalog.lo_from_bytea(oid, bytea) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pg_catalog.lo_create(oid), pg_catalog.lo_creat(integer), pg_catalog.lo_from_bytea(oid, bytea) TO app_owner, app_readwrite;
 REVOKE ALL ON DATABASE todo_db FROM PUBLIC;
 GRANT CONNECT, TEMPORARY ON DATABASE todo_db TO app_readwrite;
 GRANT CONNECT, TEMPORARY ON DATABASE todo_db TO app_readonly;

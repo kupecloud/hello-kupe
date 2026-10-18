@@ -3,7 +3,7 @@
 # Kupe role layout in Docker, the migration as the owner role, the API as the
 # readwrite role, then CRUD through the API, checks that the readwrite role
 # cannot change the schema or the migration history, that the readonly role
-# can read rows and nothing more, that the API survives a password rotation
+# can read rows but not write them, that the API survives a password rotation
 # without a restart, and that it refuses a server certificate for the wrong
 # host or from the wrong CA. Everything it starts is removed on exit.
 #
