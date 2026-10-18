@@ -11,8 +11,8 @@ func TestFromEnv(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			env:  map[string]string{"DATABASE_BINDING": "todo-db-app"},
-			want: Config{Port: 8080, BindingDir: "/bindings/todo-db-app"},
+			env:  map[string]string{"DATABASE_BINDING": "todo-db-readwrite"},
+			want: Config{Port: 8080, BindingDir: "/bindings/todo-db-readwrite"},
 		},
 		{
 			name: "overrides",
@@ -20,9 +20,9 @@ func TestFromEnv(t *testing.T) {
 			want: Config{Port: 9090, BindingDir: "/var/run/bindings/todo-db-owner"},
 		},
 		{name: "binding name missing", env: map[string]string{}, wantErr: true},
-		{name: "port not a number", env: map[string]string{"PORT": "http", "DATABASE_BINDING": "todo-db-app"}, wantErr: true},
-		{name: "port zero", env: map[string]string{"PORT": "0", "DATABASE_BINDING": "todo-db-app"}, wantErr: true},
-		{name: "port too large", env: map[string]string{"PORT": "65536", "DATABASE_BINDING": "todo-db-app"}, wantErr: true},
+		{name: "port not a number", env: map[string]string{"PORT": "http", "DATABASE_BINDING": "todo-db-readwrite"}, wantErr: true},
+		{name: "port zero", env: map[string]string{"PORT": "0", "DATABASE_BINDING": "todo-db-readwrite"}, wantErr: true},
+		{name: "port too large", env: map[string]string{"PORT": "65536", "DATABASE_BINDING": "todo-db-readwrite"}, wantErr: true},
 		{name: "binding name escapes root", env: map[string]string{"DATABASE_BINDING": "../etc"}, wantErr: true},
 	}
 	for _, tt := range tests {

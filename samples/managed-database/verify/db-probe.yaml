@@ -1,6 +1,6 @@
 # Tries a TCP connection to the database from whichever namespace it is
 # applied to, then exits: Succeeded means the port answered, Failed means it
-# did not within 5 seconds. It dials the app binding's Service in api, so in
+# did not within 5 seconds. It dials the readwrite binding's Service in api, so in
 # web the name resolves but the connection is dropped.
 #
 #   kubectl -n api apply -f verify/db-probe.yaml   # expect Succeeded

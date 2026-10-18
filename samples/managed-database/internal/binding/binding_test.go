@@ -78,7 +78,7 @@ func validFiles(t *testing.T) map[string]string {
 		KeyHost:     "todo-db.api.svc.cluster.local",
 		KeyPort:     "5432",
 		KeyDatabase: "todo_db",
-		KeyUsername: "app_user",
+		KeyUsername: "app_readwrite",
 		KeyPassword: "s3cret pass/with:chars@",
 		KeySSLMode:  "verify-full",
 		KeyCACert:   testCAPEM(t),
@@ -120,7 +120,7 @@ func TestReadPostgres_ValidBinding(t *testing.T) {
 		Host:       "todo-db.api.svc.cluster.local",
 		Port:       5432,
 		Database:   "todo_db",
-		Username:   "app_user",
+		Username:   "app_readwrite",
 		Password:   "s3cret pass/with:chars@",
 		CACertPath: filepath.Join(dir, KeyCACert),
 	}
@@ -265,11 +265,11 @@ func TestDir(t *testing.T) {
 		want       string
 		wantErr    bool
 	}{
-		{"/bindings", "todo-db-app", "/bindings/todo-db-app", false},
+		{"/bindings", "todo-db-readwrite", "/bindings/todo-db-readwrite", false},
 		{"/bindings", "", "", true},
 		{"/bindings", "..", "", true},
 		{"/bindings", "a/b", "", true},
-		{"", "todo-db-app", "", true},
+		{"", "todo-db-readwrite", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.root+"|"+tt.name, func(t *testing.T) {

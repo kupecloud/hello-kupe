@@ -7,12 +7,12 @@ and writes rows, and a frontend that never sees a database credential.
 | Component | Namespace | What it is | Database access |
 | --- | --- | --- | --- |
 | `todo-migrate` | `todo-migrate` | Job that applies the SQL migrations before each install and upgrade | owner role (`app_owner`): can change the schema |
-| `todo-api` | `api` | Go API: `/api/todos` plus `/healthz` and `/readyz` | app role (`app_user`): reads and writes rows only |
+| `todo-api` | `api` | Go API: `/api/todos` plus `/healthz` and `/readyz` | readwrite role (`app_readwrite`): reads and writes rows only |
 | `todo-web` | `web` | React frontend, served as static files | none |
 
 ```text
 browser ── https://todo.<cluster>.<tenant>.clusters.kupe.cloud
-  ├── /api/*  HTTPRoute (api) ── todo-api ──── TLS, app role ────┐
+  ├── /api/*  HTTPRoute (api) ── todo-api ─ TLS, readwrite role ─┐
   └── /*      HTTPRoute (web) ── todo-web (static files)          ├── todo-db
 todo-migrate Job (todo-migrate) ───────────── TLS, owner role ───┘
 ```
@@ -40,8 +40,9 @@ it (see [Clean up](#clean-up)) or keep it private, as described under
 
 * A Kupe tenant whose plan includes managed databases.
 * `kubectl` access to the cluster, `helm`, and `docker` (or another image builder).
-* Either OpenTofu or Terraform with a `kupecloud/kupe` provider release that
-  includes `kupe_database`, or the `kupe` CLI.
+* Either OpenTofu or Terraform with a `kupecloud/kupe` provider release whose
+  `kupe_database_binding` takes `namespaces` and the `readwrite` role, or a
+  `kupe` CLI release that knows the `readwrite` role.
 
 ## 1. Create the database
 
@@ -75,7 +76,7 @@ Kupe name becomes `_`.
 ## 2. Add the bindings
 
 Each role gets its own namespace. The owner binding targets `todo-migrate`,
-where only the migration Job runs, and the app binding targets `api`. Create
+where only the migration Job runs, and the readwrite binding targets `api`. Create
 `web` yourself:
 
 ```bash
@@ -89,7 +90,7 @@ Terraform has already added the bindings. With the CLI:
 
 ```bash
 kupe database binding add todo-db --cluster <cluster> --namespace todo-migrate --role owner
-kupe database binding add todo-db --cluster <cluster> --namespace api --role app
+kupe database binding add todo-db --cluster <cluster> --namespace api --role readwrite
 ```
 
 Each binding delivers a Secret named `{database}-{role}` and a Service named
@@ -97,7 +98,7 @@ after the database into its namespace:
 
 ```bash
 kubectl -n api get service todo-db
-kubectl -n api get secret todo-db-app
+kubectl -n api get secret todo-db-readwrite
 kubectl -n todo-migrate get service todo-db
 kubectl -n todo-migrate get secret todo-db-owner
 ```
@@ -105,14 +106,14 @@ kubectl -n todo-migrate get secret todo-db-owner
 List the keys without printing any values:
 
 ```bash
-kubectl -n api get secret todo-db-app \
+kubectl -n api get secret todo-db-readwrite \
   -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}'
 ```
 
 The keys follow [servicebinding.io](https://servicebinding.io/): `type`,
 `provider`, `host`, `port`, `database`, `username`, `password`, `sslmode`,
 `ca.crt` and `uri`. `host` names the Service in the binding's own namespace:
-`todo-db.api.svc.cluster.local` for the app binding,
+`todo-db.api.svc.cluster.local` for the readwrite binding,
 `todo-db.todo-migrate.svc.cluster.local` for the owner binding. `uri` holds the
 same details as one connection string, with `sslrootcert` set to
 `/bindings/<secret name>/ca.crt`. That is where the chart mounts each Secret
@@ -178,15 +179,16 @@ kubectl -n todo-migrate logs job/todo-migrate
 A first run logs `"msg":"schema up to date","version":1,"applied":1`; every run
 after that logs `"applied":0`.
 
-Kupe sets default privileges on every database so the app role can read and
-write rows in any table the owner role creates. `todos` needs exactly that, so
-the migration has no `GRANT`. The same default privileges would also let the
-app role write to `goose_db_version` and make a later run skip a migration, so
-the first migration revokes every privilege the app role has on that table.
+Kupe sets default privileges on every database so the readwrite role can read
+and write rows in any table the owner role creates. `todos` needs exactly that,
+so the migration has no `GRANT`. The same default privileges would also let the
+readwrite role write to `goose_db_version` and make a later run skip a
+migration, so the first migration revokes every privilege the readwrite role
+has on that table.
 
 ### API
 
-`todo-api` mounts `todo-db-app` at `/bindings/todo-db-app` and reads one file
+`todo-api` mounts `todo-db-readwrite` at `/bindings/todo-db-readwrite` and reads one file
 per key. It sets `sslmode=verify-full` with `sslrootcert` pointing at the
 mounted `ca.crt`: the server certificate must be signed by that CA and carry the
 host name in `host`. It refuses to start if the Secret asks for any other
@@ -288,9 +290,9 @@ kubectl -n web delete pod db-probe
 
 What the platform guarantees for this layout:
 
-* **Each role's Secret reaches one namespace.** A binding delivers its Secret
-  into the one namespace it names: the owner role's into `todo-migrate`, the
-  app role's into `api`. `web` has no binding, so it has no Secret to mount, and
+* **Each role's Secret reaches only the namespaces its binding lists.** Here
+  each binding lists one: the owner role's into `todo-migrate`, the readwrite
+  role's into `api`. `web` has no binding, so it has no Secret to mount, and
   Kubernetes RBAC never grants a database login.
 * **The network path is opened for bound namespaces only.** Kupe allows
   connections to the database port from pods in bound namespaces of the bound
@@ -300,25 +302,27 @@ What the platform guarantees for this layout:
 * **TLS is required.** The database rejects connections without TLS, and the
   sample verifies the server certificate and host name against the CA in the
   binding.
-* **Two roles, neither a superuser.** `app_user` can read and write rows in
-  tables the owner creates. It cannot create, alter or drop tables:
-  `CREATE TABLE` fails with `permission denied for schema public`.
+* **Three roles, none a superuser.** `app_readwrite` can read and write rows in
+  tables the owner creates, and `app_readonly` can only read them. Neither can
+  create, alter or drop tables: `CREATE TABLE` fails with
+  `permission denied for schema public`.
 
 What it does not separate:
 
-* **Pods in `api` share the app role.** Any workload in `api` can mount
-  `todo-db-app` and reach the database. Keep unrelated workloads out of that
+* **Pods in `api` share the readwrite role.** Any workload in `api` can mount
+  `todo-db-readwrite` and reach the database. Keep unrelated workloads out of that
   namespace. The owner role stays out of `api` because its binding targets
   `todo-migrate`.
 * **Pods in `todo-migrate` share the owner role.** Run nothing there except the
   migration Job.
-* **Removed access.** Deleting a binding removes the Secret and the network path,
-  not knowledge of the password. Rotate the role's credentials afterwards.
+* **Removed access.** Deleting a binding, or removing a namespace from one,
+  removes the Secret and the network path, not knowledge of the password.
+  Rotate the role's credentials afterwards.
 
 ## Rotating credentials
 
 ```bash
-kupe database rotate-credentials todo-db --role app
+kupe database rotate-credentials todo-db --role readwrite
 ```
 
 The old password stops working immediately and the bound Secrets are updated.
@@ -339,6 +343,83 @@ kubectl -n api rollout restart deploy/todo-api
 The migration Job reads its Secret when it starts, so the next run after an
 owner rotation uses the new password.
 
+## Read-only access
+
+The sample does not need a read-only role, but a reporting job would. Bind
+`readonly` into a namespace of its own:
+
+```bash
+kupe database binding add todo-db --cluster <cluster> --namespace todo-reports --role readonly
+```
+
+or set `enable_reports = true` in the Terraform. The binding delivers
+`todo-db-readonly`, with the `username` `app_readonly` and a password of its
+own, into `todo-reports`. Save this Pod as `todo-report.yaml`. It mounts the
+Secret the way the API mounts its own and counts the todos:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: todo-report
+  namespace: todo-reports
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: report
+      image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+      command: ["/bin/sh", "-c"]
+      args:
+        - psql "$(cat /bindings/todo-db-readonly/uri)" -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM todos'
+      env:
+        # psql looks in $HOME; point it at a writable directory.
+        - name: HOME
+          value: /tmp
+      volumeMounts:
+        - name: database
+          mountPath: /bindings/todo-db-readonly
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+  volumes:
+    - name: database
+      secret:
+        secretName: todo-db-readonly
+    - name: tmp
+      emptyDir: {}
+```
+
+```bash
+kubectl apply -f todo-report.yaml
+kubectl -n todo-reports logs todo-report   # the count
+kubectl -n todo-reports delete pod todo-report
+```
+
+Swap the query for `INSERT INTO todos (title) VALUES ('no')` and the Pod fails
+with `permission denied for table todos`. The readonly role reads every row of
+every table the owner creates, so give it only to jobs that may see all of
+them.
+
 ## Clean up
 
 With Helm and the CLI:
@@ -346,7 +427,7 @@ With Helm and the CLI:
 ```bash
 helm uninstall todo --namespace api
 kupe database binding list todo-db
-kupe database binding delete todo-db <app binding name>
+kupe database binding delete todo-db <readwrite binding name>
 kupe database binding delete todo-db <owner binding name>
 kubectl delete namespace web api todo-migrate
 kupe database update todo-db --deletion-protection=false
@@ -359,8 +440,9 @@ not track hook resources; deleting the namespace removes it.
 With Terraform or OpenTofu, uninstall the chart, then remove the `lifecycle`
 block from `kupe_database.todo`, set `deletion_protection = false`, run
 `tofu apply`, and then `tofu destroy`. That destroys the `todo` cluster as well
-as the database and both bindings. If you pointed the bindings at a cluster you
-already had, delete the `web`, `api` and `todo-migrate` namespaces afterwards.
+as the database and its bindings. If you pointed the bindings at a cluster you
+already had, delete the `web`, `api` and `todo-migrate` namespaces afterwards,
+and `todo-reports` if you set `enable_reports`.
 
 Deleting a database removes it immediately. Its storage is kept for 7 days for
 support-assisted recovery, then permanently deleted. There is no self-service
@@ -378,10 +460,11 @@ make smoke      # the full flow in Docker
 `make smoke` runs `scripts/local-smoke.sh`. It starts PostgreSQL 18 with a
 self-signed CA, sets up the same roles, grants and TLS-only `pg_hba.conf` as a
 Kupe database, then runs the migration as the owner role (twice), the API as the
-app role, and CRUD through the API. It checks that the app role cannot create a
-table or use `goose_db_version`, that a plaintext connection is refused, that
-the API keeps working after the app role's password is rotated without being
-restarted, and that it reports not ready when the server certificate does not
+readwrite role, and CRUD through the API. It checks that the readwrite role
+cannot create a table or use `goose_db_version`, that the readonly role can read
+a row but cannot insert one or create a table, that a plaintext connection is
+refused, that the API keeps working after the readwrite role's password is
+rotated without being restarted, and that it reports not ready when the server certificate does not
 name its host or was signed by another CA. It removes every container, network and image
 it created when it exits. The PostgreSQL image is pinned by digest; set
 `PG_IMAGE` to pull it from a mirror.

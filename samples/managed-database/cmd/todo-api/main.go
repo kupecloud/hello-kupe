@@ -2,7 +2,7 @@
 // the schema migrations and exits.
 //
 // Both modes read the database from a binding Secret mounted as files. The
-// Deployment mounts the app role's Secret (data access only) and the
+// Deployment mounts the readwrite role's Secret (data access only) and the
 // migration Job mounts the owner role's Secret (schema changes), so the same
 // image runs with different privileges.
 package main

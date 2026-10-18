@@ -1,7 +1,8 @@
 # A cluster, a PostgreSQL database and two bindings: the owner role into the
-# `todo-migrate` namespace for the migration Job, the app role into `api` for
-# the API. Each binding creates its namespace. The `web` namespace gets no
-# binding, so it has no Secret and no network path to the database.
+# `todo-migrate` namespace for the migration Job, the readwrite role into `api`
+# for the API. Each binding creates its namespace. The `web` namespace gets no
+# binding, so it has no Secret and no network path to the database. Set
+# enable_reports to add a third, the readonly role into `todo-reports`.
 
 terraform {
   required_providers {
@@ -26,6 +27,12 @@ variable "cluster_name" {
   description = "Name of the cluster the sample runs in."
   type        = string
   default     = "todo"
+}
+
+variable "enable_reports" {
+  description = "Bind the readonly role into todo-reports for a reporting job."
+  type        = bool
+  default     = false
 }
 
 resource "kupe_cluster" "todo" {
@@ -65,25 +72,35 @@ resource "kupe_database" "todo" {
 # Schema changes. Mounted only by the migration Job, in a namespace of its own
 # so no pod in api can mount the owner Secret.
 resource "kupe_database_binding" "owner" {
-  database  = kupe_database.todo.name
-  cluster   = kupe_cluster.todo.name
-  namespace = "todo-migrate"
-  role      = "owner"
+  database   = kupe_database.todo.name
+  cluster    = kupe_cluster.todo.name
+  namespaces = ["todo-migrate"]
+  role       = "owner"
   # secret_name defaults to "todo-db-owner"
 }
 
 # Reads and writes rows. Mounted by the API.
-resource "kupe_database_binding" "app" {
-  database  = kupe_database.todo.name
-  cluster   = kupe_cluster.todo.name
-  namespace = "api"
-  role      = "app"
-  # secret_name defaults to "todo-db-app"
+resource "kupe_database_binding" "readwrite" {
+  database   = kupe_database.todo.name
+  cluster    = kupe_cluster.todo.name
+  namespaces = ["api"]
+  role       = "readwrite"
+  # secret_name defaults to "todo-db-readwrite"
+}
+
+# Reads rows only. Off by default: nothing in the chart uses it.
+resource "kupe_database_binding" "reports" {
+  count      = var.enable_reports ? 1 : 0
+  database   = kupe_database.todo.name
+  cluster    = kupe_cluster.todo.name
+  namespaces = ["todo-reports"]
+  role       = "readonly"
+  # secret_name defaults to "todo-db-readonly"
 }
 
 output "database_host" {
   description = "In-cluster DNS name the api namespace connects to."
-  value       = kupe_database_binding.app.host
+  value       = one([for ns in kupe_database_binding.readwrite.namespace_status : ns.host if ns.name == "api"])
 }
 
 output "owner_secret_name" {
@@ -91,7 +108,7 @@ output "owner_secret_name" {
   value       = kupe_database_binding.owner.secret_name
 }
 
-output "app_secret_name" {
+output "readwrite_secret_name" {
   description = "Secret in the api namespace mounted by the API."
-  value       = kupe_database_binding.app.secret_name
+  value       = kupe_database_binding.readwrite.secret_name
 }

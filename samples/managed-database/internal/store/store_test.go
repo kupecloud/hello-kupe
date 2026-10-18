@@ -8,7 +8,7 @@ import (
 
 // Nothing listens on port 1, and Open does not connect, so no database is
 // needed to inspect the pool it builds.
-const unusedConnString = "postgres://app_user:startup-password@127.0.0.1:1/todo_db?sslmode=disable"
+const unusedConnString = "postgres://app_readwrite:startup-password@127.0.0.1:1/todo_db?sslmode=disable"
 
 func TestOpen_ReadsPasswordForEachNewConnection(t *testing.T) {
 	passwords := []string{"first", "rotated"}

@@ -12,12 +12,12 @@ httpRoute:
   gatewayName: external-gateway
   gatewayNamespace: kube-system
 
-# The binding Secrets Kupe delivers: the app role's into api.namespace, the
+# The binding Secrets Kupe delivers: the readwrite role's into api.namespace, the
 # owner role's into migrations.namespace. These are the defaults for a
 # database named `todo-db` (`{database}-{role}`); change them if the database
 # has another name or the bindings set `secret_name`.
 database:
-  appSecretName: todo-db-app
+  appSecretName: todo-db-readwrite
   ownerSecretName: todo-db-owner
 
 # Where binding Secrets are mounted, following servicebinding.io. Each

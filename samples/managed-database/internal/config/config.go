@@ -27,7 +27,7 @@ type Config struct {
 
 // FromEnv reads PORT, SERVICE_BINDING_ROOT and DATABASE_BINDING through
 // getenv (os.Getenv in production). DATABASE_BINDING is the name of the
-// binding Secret, for example todo-db-app, and is required: the API and the
+// binding Secret, for example todo-db-readwrite, and is required: the API and the
 // migration mount different Secrets, and guessing would pick the wrong role.
 func FromEnv(getenv func(string) string) (Config, error) {
 	cfg := Config{Port: DefaultPort}
