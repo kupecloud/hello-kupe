@@ -25,7 +25,7 @@ database:
 bindingRoot: /bindings
 
 api:
-  namespace: api
+  namespace: todo-api
   replicaCount: 1
   # One image runs the API and the migration. Build it from Dockerfile.api
   # and push it to a registry your cluster can pull from. A tag of the form
@@ -61,7 +61,7 @@ migrations:
       memory: 64Mi
 
 web:
-  namespace: web
+  namespace: todo-web
   replicaCount: 1
   # Build from Dockerfile.web.
   image:

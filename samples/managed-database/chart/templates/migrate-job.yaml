@@ -5,8 +5,8 @@ API rolls out. Argo CD runs Helm hooks as PreSync hooks. before-hook-creation
 replaces the previous Job on each run and keeps the last one for its logs.
 
 The Job and its ServiceAccount live in migrations.namespace, where the owner
-binding delivers its Secret. The API's namespace only ever holds the app
-role's Secret.
+binding delivers its Secret. The API's namespace only ever holds the
+readwrite role's Secret.
 */}}
 apiVersion: v1
 kind: ServiceAccount

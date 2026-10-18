@@ -25,14 +25,14 @@ BAD_CA_API="$RUN_ID-api-bad-ca"
 API_IMAGE="todo-api:$RUN_ID"
 WEB_IMAGE="todo-web:$RUN_ID"
 # Each binding's host is the database's name in the namespace it targets:
-# the readwrite role is bound into api, the owner role into todo-migrate and
-# the readonly role into todo-reports. The server certificate carries all
+# the readwrite role is bound into todo-api, the owner role into todo-migrate
+# and the readonly role into todo-reports. The server certificate carries all
 # three, as a Kupe database's does.
-APP_HOST="todo-db.api.svc.cluster.local"
+APP_HOST="todo-db.todo-api.svc.cluster.local"
 OWNER_HOST="todo-db.todo-migrate.svc.cluster.local"
 REPORTS_HOST="todo-db.todo-reports.svc.cluster.local"
 # Resolves on the test network but is not in the server certificate.
-UNLISTED_HOST="todo-db.web.svc.cluster.local"
+UNLISTED_HOST="todo-db.todo-web.svc.cluster.local"
 API_PORT="${API_PORT:-18080}"
 WEB_PORT="${WEB_PORT:-18081}"
 # Any PostgreSQL 18 image with the official entrypoint, e.g. a registry

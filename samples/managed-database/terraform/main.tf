@@ -1,8 +1,9 @@
 # A cluster, a PostgreSQL database and two bindings: the owner role into the
-# `todo-migrate` namespace for the migration Job, the readwrite role into `api`
-# for the API. Each binding creates its namespace. The `web` namespace gets no
-# binding, so it has no Secret and no network path to the database. Set
-# enable_reports to add a third, the readonly role into `todo-reports`.
+# `todo-migrate` namespace for the migration Job, the readwrite role into
+# `todo-api` for the API. Each binding creates its namespace. The `todo-web`
+# namespace gets no binding, so it has no Secret and no network path to the
+# database. Set enable_reports to add a third, the readonly role into
+# `todo-reports`.
 
 terraform {
   required_providers {
@@ -70,7 +71,7 @@ resource "kupe_database" "todo" {
 }
 
 # Schema changes. Mounted only by the migration Job, in a namespace of its own
-# so no pod in api can mount the owner Secret.
+# so no pod in todo-api can mount the owner Secret.
 resource "kupe_database_binding" "owner" {
   database   = kupe_database.todo.name
   cluster    = kupe_cluster.todo.name
@@ -83,7 +84,7 @@ resource "kupe_database_binding" "owner" {
 resource "kupe_database_binding" "readwrite" {
   database   = kupe_database.todo.name
   cluster    = kupe_cluster.todo.name
-  namespaces = ["api"]
+  namespaces = ["todo-api"]
   role       = "readwrite"
   # secret_name defaults to "todo-db-readwrite"
 }
@@ -99,8 +100,8 @@ resource "kupe_database_binding" "reports" {
 }
 
 output "database_host" {
-  description = "In-cluster DNS name the api namespace connects to."
-  value       = one([for ns in kupe_database_binding.readwrite.namespace_status : ns.host if ns.name == "api"])
+  description = "In-cluster DNS name the todo-api namespace connects to."
+  value       = one([for ns in kupe_database_binding.readwrite.namespace_status : ns.host if ns.name == "todo-api"])
 }
 
 output "owner_secret_name" {
@@ -109,6 +110,6 @@ output "owner_secret_name" {
 }
 
 output "readwrite_secret_name" {
-  description = "Secret in the api namespace mounted by the API."
+  description = "Secret in the todo-api namespace mounted by the API."
   value       = kupe_database_binding.readwrite.secret_name
 }

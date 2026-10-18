@@ -7,14 +7,14 @@ and writes rows, and a frontend that never sees a database credential.
 | Component | Namespace | What it is | Database access |
 | --- | --- | --- | --- |
 | `todo-migrate` | `todo-migrate` | Job that applies the SQL migrations before each install and upgrade | owner role (`app_owner`): can change the schema |
-| `todo-api` | `api` | Go API: `/api/todos` plus `/healthz` and `/readyz` | readwrite role (`app_readwrite`): reads and writes rows only |
-| `todo-web` | `web` | React frontend, served as static files | none |
+| `todo-api` | `todo-api` | Go API: `/api/todos` plus `/healthz` and `/readyz` | readwrite role (`app_readwrite`): reads and writes rows only |
+| `todo-web` | `todo-web` | React frontend, served as static files | none |
 
 ```text
 browser ── https://todo.<cluster>.<tenant>.clusters.kupe.cloud
-  ├── /api/*  HTTPRoute (api) ── todo-api ─ TLS, readwrite role ─┐
-  └── /*      HTTPRoute (web) ── todo-web (static files)          ├── todo-db
-todo-migrate Job (todo-migrate) ───────────── TLS, owner role ───┘
+  ├── /api/*  HTTPRoute (todo-api) ── todo-api ─ TLS, readwrite role ─┐
+  └── /*      HTTPRoute (todo-web) ── todo-web (static files)         ├── todo-db
+todo-migrate Job (todo-migrate) ────────────────── TLS, owner role ───┘
 ```
 
 Both routes use the same hostname. The gateway sends `/api` to the API and
@@ -76,29 +76,29 @@ Kupe name becomes `_`.
 ## 2. Add the bindings
 
 Each role gets its own namespace. The owner binding targets `todo-migrate`,
-where only the migration Job runs, and the readwrite binding targets `api`. Create
-`web` yourself:
+where only the migration Job runs, and the readwrite binding targets
+`todo-api`. Create `todo-web` yourself:
 
 ```bash
-kubectl create namespace web
+kubectl create namespace todo-web
 ```
 
-Do not create `api` or `todo-migrate`: a binding creates the namespace it
+Do not create `todo-api` or `todo-migrate`: a binding creates the namespace it
 targets when it delivers its Secret.
 
 Terraform has already added the bindings. With the CLI:
 
 ```bash
 kupe database binding add todo-db --cluster <cluster> --namespace todo-migrate --role owner
-kupe database binding add todo-db --cluster <cluster> --namespace api --role readwrite
+kupe database binding add todo-db --cluster <cluster> --namespace todo-api --role readwrite
 ```
 
 Each binding delivers a Secret named `{database}-{role}` and a Service named
 after the database into its namespace:
 
 ```bash
-kubectl -n api get service todo-db
-kubectl -n api get secret todo-db-readwrite
+kubectl -n todo-api get service todo-db
+kubectl -n todo-api get secret todo-db-readwrite
 kubectl -n todo-migrate get service todo-db
 kubectl -n todo-migrate get secret todo-db-owner
 ```
@@ -106,21 +106,21 @@ kubectl -n todo-migrate get secret todo-db-owner
 List the keys without printing any values:
 
 ```bash
-kubectl -n api get secret todo-db-readwrite \
+kubectl -n todo-api get secret todo-db-readwrite \
   -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}'
 ```
 
 The keys follow [servicebinding.io](https://servicebinding.io/): `type`,
 `provider`, `host`, `port`, `database`, `username`, `password`, `sslmode`,
 `ca.crt` and `uri`. `host` names the Service in the binding's own namespace:
-`todo-db.api.svc.cluster.local` for the readwrite binding,
+`todo-db.todo-api.svc.cluster.local` for the readwrite binding,
 `todo-db.todo-migrate.svc.cluster.local` for the owner binding. `uri` holds the
 same details as one connection string, with `sslrootcert` set to
 `/bindings/<secret name>/ca.crt`. That is where the chart mounts each Secret
 (`SERVICE_BINDING_ROOT=/bindings`), so the path is correct whichever form an
 application reads. This sample reads the separate keys.
 
-Nothing is created in `web`. That namespace has no binding.
+Nothing is created in `todo-web`. That namespace has no binding.
 
 ## 3. Build the images
 
@@ -146,7 +146,7 @@ One Helm release installs all three components, in this order:
 
 ```bash
 helm upgrade --install todo ./chart \
-  --namespace api \
+  --namespace todo-api \
   --set tenant=<tenant> \
   --set cluster=<cluster> \
   --set api.image.repository=<registry>/todo-api \
@@ -199,14 +199,14 @@ The API does not connect at startup. `/readyz` pings the database and
 restarting them. Only `/api` is routed publicly.
 
 ```bash
-kubectl -n api rollout status deploy/todo-api
+kubectl -n todo-api rollout status deploy/todo-api
 ```
 
 To keep the API off the internet, install with `--set httpRoute.enabled=false`
 and reach it through a port-forward:
 
 ```bash
-kubectl -n api port-forward svc/todo-api 8080:80
+kubectl -n todo-api port-forward svc/todo-api 8080:80
 ```
 
 ### Frontend
@@ -216,7 +216,7 @@ allows its own origin. Its pod mounts no Secret, has no database settings, and
 has no ServiceAccount token.
 
 ```bash
-kubectl -n web rollout status deploy/todo-web
+kubectl -n todo-web rollout status deploy/todo-web
 ```
 
 ### With Argo CD
@@ -251,7 +251,7 @@ spec:
             tag: "0.1.0"
   destination:
     name: <tenant>--<cluster>-<suffix>
-    namespace: api
+    namespace: todo-api
   syncPolicy:
     automated:
       prune: true
@@ -269,21 +269,21 @@ curl -s -X POST "$HOST/api/todos" -H 'Content-Type: application/json' -d '{"titl
 curl -s "$HOST/api/todos"
 ```
 
-Check that `web` has no binding Secret:
+Check that `todo-web` has no binding Secret:
 
 ```bash
-kubectl -n web get secrets
+kubectl -n todo-web get secrets
 ```
 
-Check the network path, with `api` as the control:
+Check the network path, with `todo-api` as the control:
 
 ```bash
-kubectl -n api apply -f verify/db-probe.yaml
-kubectl -n web apply -f verify/db-probe.yaml
-kubectl -n api get pod db-probe   # Completed: the database answered
-kubectl -n web get pod db-probe   # Error: no connection within 5 seconds
-kubectl -n api delete pod db-probe
-kubectl -n web delete pod db-probe
+kubectl -n todo-api apply -f verify/db-probe.yaml
+kubectl -n todo-web apply -f verify/db-probe.yaml
+kubectl -n todo-api get pod db-probe   # Completed: the database answered
+kubectl -n todo-web get pod db-probe   # Error: no connection within 5 seconds
+kubectl -n todo-api delete pod db-probe
+kubectl -n todo-web delete pod db-probe
 ```
 
 ## Isolation
@@ -292,13 +292,13 @@ What the platform guarantees for this layout:
 
 * **Each role's Secret reaches only the namespaces its binding lists.** Here
   each binding lists one: the owner role's into `todo-migrate`, the readwrite
-  role's into `api`. `web` has no binding, so it has no Secret to mount, and
-  Kubernetes RBAC never grants a database login.
+  role's into `todo-api`. `todo-web` has no binding, so it has no Secret to
+  mount, and Kubernetes RBAC never grants a database login.
 * **The network path is opened for bound namespaces only.** Kupe allows
   connections to the database port from pods in bound namespaces of the bound
   cluster, and drops everything else. The rules live outside your cluster, so
-  nothing inside it can widen them: pods in `web`, other namespaces and other
-  clusters cannot connect.
+  nothing inside it can widen them: pods in `todo-web`, other namespaces and
+  other clusters cannot connect.
 * **TLS is required.** The database rejects connections without TLS, and the
   sample verifies the server certificate and host name against the CA in the
   binding.
@@ -309,10 +309,10 @@ What the platform guarantees for this layout:
 
 What it does not separate:
 
-* **Pods in `api` share the readwrite role.** Any workload in `api` can mount
-  `todo-db-readwrite` and reach the database. Keep unrelated workloads out of that
-  namespace. The owner role stays out of `api` because its binding targets
-  `todo-migrate`.
+* **Pods in `todo-api` share the readwrite role.** Any workload in `todo-api`
+  can mount `todo-db-readwrite` and reach the database. Keep unrelated
+  workloads out of that namespace. The owner role stays out of `todo-api`
+  because its binding targets `todo-migrate`.
 * **Pods in `todo-migrate` share the owner role.** Run nothing there except the
   migration Job.
 * **Removed access.** Deleting a binding, or removing a namespace from one,
@@ -337,7 +337,7 @@ The CA in `ca.crt` is read only when the API starts. Restart it after the CA
 changes:
 
 ```bash
-kubectl -n api rollout restart deploy/todo-api
+kubectl -n todo-api rollout restart deploy/todo-api
 ```
 
 The migration Job reads its Secret when it starts, so the next run after an
@@ -425,11 +425,11 @@ them.
 With Helm and the CLI:
 
 ```bash
-helm uninstall todo --namespace api
+helm uninstall todo --namespace todo-api
 kupe database binding list todo-db
 kupe database binding delete todo-db <readwrite binding name>
 kupe database binding delete todo-db <owner binding name>
-kubectl delete namespace web api todo-migrate
+kubectl delete namespace todo-web todo-api todo-migrate
 kupe database update todo-db --deletion-protection=false
 kupe database delete todo-db
 ```
@@ -441,7 +441,7 @@ With Terraform or OpenTofu, uninstall the chart, then remove the `lifecycle`
 block from `kupe_database.todo`, set `deletion_protection = false`, run
 `tofu apply`, and then `tofu destroy`. That destroys the `todo` cluster as well
 as the database and its bindings. If you pointed the bindings at a cluster you
-already had, delete the `web`, `api` and `todo-migrate` namespaces afterwards,
+already had, delete the `todo-web`, `todo-api` and `todo-migrate` namespaces afterwards,
 and `todo-reports` if you set `enable_reports`.
 
 Deleting a database removes it immediately. Its storage is kept for 7 days for

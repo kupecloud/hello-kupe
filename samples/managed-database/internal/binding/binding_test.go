@@ -75,7 +75,7 @@ func validFiles(t *testing.T) map[string]string {
 	t.Helper()
 	return map[string]string{
 		KeyType:     "postgresql",
-		KeyHost:     "todo-db.api.svc.cluster.local",
+		KeyHost:     "todo-db.todo-api.svc.cluster.local",
 		KeyPort:     "5432",
 		KeyDatabase: "todo_db",
 		KeyUsername: "app_readwrite",
@@ -109,7 +109,7 @@ func testCAPEM(t *testing.T) string {
 
 func TestReadPostgres_ValidBinding(t *testing.T) {
 	files := validFiles(t)
-	files[KeyHost] = "todo-db.api.svc.cluster.local\n"
+	files[KeyHost] = "todo-db.todo-api.svc.cluster.local\n"
 	dir := writeBinding(t, files)
 
 	got, err := ReadPostgres(dir)
@@ -117,7 +117,7 @@ func TestReadPostgres_ValidBinding(t *testing.T) {
 		t.Fatalf("ReadPostgres: %v", err)
 	}
 	want := Postgres{
-		Host:       "todo-db.api.svc.cluster.local",
+		Host:       "todo-db.todo-api.svc.cluster.local",
 		Port:       5432,
 		Database:   "todo_db",
 		Username:   "app_readwrite",
