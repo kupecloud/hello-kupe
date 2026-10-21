@@ -1,6 +1,6 @@
 module github.com/kupecloud/hello-kupe/samples/managed-database
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/jackc/pgx/v5 v5.11.0
