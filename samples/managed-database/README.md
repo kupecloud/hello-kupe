@@ -140,6 +140,12 @@ binary, so a Job always applies the schema that version of the API expects.
 The chart renders `repository:tag`, so a tag of the form
 `0.1.0@sha256:<digest>` pins the exact build you pushed.
 
+Using your Kupe registry: push to `registry.kupe.cloud/<tenant>/todo-api` and
+`registry.kupe.cloud/<tenant>/todo-web` after `kupe registry login`, and connect
+the cluster once with `kupe registry connect <cluster>`. Every pod in the
+cluster then pulls from it with no pull Secret. The
+[registry sample](../registry/) walks through it.
+
 ## 4. Deploy
 
 One Helm release installs all three components, in this order:
