@@ -1,0 +1,49 @@
+# Builds the image in this repository and pushes it to your Kupe registry
+# on every push to main.
+#
+# Set in the repository's settings (Settings > Secrets and variables > Actions):
+#   variable KUPE_TENANT             your tenant name
+#   variable KUPE_REGISTRY_USERNAME  the access token's username (kupe+<tenant>+tok-...)
+#   secret   KUPE_REGISTRY_TOKEN     the access token's secret (kupecr_...)
+# Create a push token with:
+#   kupe registry token create --name github-actions --access push -o json
+name: Push to the Kupe registry
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    name: Build and push
+    runs-on: ubuntu-latest
+    env:
+      # Change hello-kupe to the repository name you push to.
+      IMAGE: registry.kupe.cloud/${{ vars.KUPE_TENANT }}/hello-kupe
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Sign in to the Kupe registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: registry.kupe.cloud
+          username: ${{ vars.KUPE_REGISTRY_USERNAME }}
+          password: ${{ secrets.KUPE_REGISTRY_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
