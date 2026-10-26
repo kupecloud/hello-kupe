@@ -21,3 +21,8 @@ resources:
   limits:
     cpu: 250m
     memory: 128Mi
+
+# Public image built and signed by GitHub Actions on core-hello-kupe-demo.
+image:
+  repository: ghcr.io/kupecloud/hello-kupe
+  tag: demo-20261026-core-2b11b9b@sha256:ff53185621ab81d22fd40e6807d93056dbef00405c7d4e1920fe204ddad9d8cc
