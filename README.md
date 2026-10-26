@@ -1,10 +1,23 @@
 # Hello Kupe
 
-`hello-kupe` is the official Kupe Cloud quickstart app.
+`hello-kupe` is the official Kupe Cloud quickstart app: a Next.js memory game
+served by Go, with a scoreboard backed by managed PostgreSQL.
+
+Match six pairs to discover custom domains, databases, registries, autoscaling,
+observability and GitOps. Each match unlocks a short Kupe lesson. Finish the board,
+enter a display name and save your result. The server controls card reveals,
+counts moves and calculates time; the browser cannot submit an arbitrary score.
+
+**Start here:** [From signup to your first game](docs/deploy-from-scratch.md).
+The walkthrough covers infrastructure, building an image, deployment, persistence,
+custom domains and cleanup. [The implementation plan](docs/game-plan.md) describes
+the design and verification scope.
 
 <!-- toc -->
 
 * [Deploy it](#deploy-it)
+  * [Fresh tenant: provision and deploy](#fresh-tenant-provision-and-deploy)
+  * [Deploy with GitOps](#deploy-with-gitops)
   * [Or install the chart directly](#or-install-the-chart-directly)
 * [Overview](#overview)
   * [Endpoints](#endpoints)
@@ -18,9 +31,62 @@
 
 ## Deploy it
 
-The fastest route needs nothing installed locally and no clone. Apply one
-`Application` into the `argocd` namespace of your Kupe cluster, and the platform
-deploys this repo for you.
+### Fresh tenant: provision and deploy
+
+Create a tenant at [kupe.cloud/signup](https://kupe.cloud/signup), then create an
+**admin API key** in **Settings → API Keys** in the Kupe console. Install Node.js
+22+, Docker with Buildx, the Kupe CLI, kubectl, Helm and OpenTofu (or Terraform).
+Docker must be running.
+
+From a checkout of this repository, export the key locally as `KUPE_API_KEY`.
+Then run:
+
+```bash
+make cloud-init TENANT=your-tenant
+make cloud-plan
+make cloud-apply
+make cloud-deploy
+```
+
+`cloud-init` creates `infra/terraform.tfvars` for a fresh demo and initializes
+OpenTofu. It preserves an existing variable file. Review the plan before
+confirming `cloud-apply`: it provisions the cluster, managed PostgreSQL,
+owner/readwrite database bindings, managed registry, cluster pull binding and a
+seven-day build token.
+
+`cloud-deploy` builds this checkout, pushes the image and installs the chart
+with two app replicas and persistent scores. It runs schema migrations before
+the app starts and prints your public URL:
+
+```text
+https://hello-kupe.demo.<tenant>.clusters.kupe.cloud
+```
+
+The generated kubeconfig and Helm values live under
+`.tmp/cloud/<tenant>/<cluster>/`, outside Git. The kubeconfig is readable only by
+you, embeds the API key and expires/revokes with it. Deployment commands target
+that file explicitly; your default Kubernetes context is unchanged.
+
+```bash
+make cloud-kubeconfig # Generate or refresh just the repo-local kubeconfig
+make cloud-status     # Show pods, service, route and public URL
+```
+
+Re-run `make cloud-deploy` after code changes. Use `TF=terraform` on each Make
+command if you prefer Terraform. The build token is stored in Terraform state;
+keep state private. An existing tenant registry must be imported before apply if
+this configuration will manage it.
+
+Follow [From signup to your first game](docs/deploy-from-scratch.md) for secure
+API-key input, prerequisites, existing registries, token renewal, persistence
+checks and cleanup. Use **Helm** for this route: plain `kubectl apply` does not
+run the chart's pre-deployment migration hooks.
+
+### Deploy with GitOps
+
+For an existing Kupe cluster, apply an Argo CD `Application` and let the platform
+deploy the chart from Git. The default chart image follows the published release;
+the fresh-tenant workflow above builds the game from your current checkout.
 
 ```yaml
 # hello-kupe.yaml
@@ -60,6 +126,25 @@ is derived from your cluster's internal ID. Open Argo CD (the grid icon in the K
 console, or `argocd.kupe.cloud`), go to **Settings → Clusters**, and copy the name
 exactly. Only your own clusters are listed, so anything you see there is safe to
 copy.
+
+By default the chart runs a single-replica practice game with temporary scores.
+For persistent results, provision [infra/](infra/README.md), use namespace
+`hello-kupe`, and add these Helm values to the Application above:
+
+```yaml
+database:
+  enabled: true
+  readwriteSecretName: <database-name>-readwrite
+  ownerSecretName: <database-name>-owner
+migrations:
+  namespace: hello-kupe-migrate
+```
+
+Use the Secret names from your Terraform outputs and the image repository/tag
+from the generated Helm values when deploying this checkout through GitOps.
+The bindings must be ready before Argo CD syncs. The owner binding belongs only
+in the migration namespace; the application uses the readwrite binding. To try
+unreleased code, build and override the image as described in the walkthrough.
 
 Then open the app:
 
@@ -112,24 +197,33 @@ to focus on day one:
 * **Horizontal autoscaling** scales it out on CPU, using the metrics-server
   your tenant cluster already proxies
 
-The app serves a simple HTTP response, exposes health and metrics
-endpoints, and emits
-continuous background logs so the observability flow is visible immediately
-after deploy.
+The app serves the game and API under the same hostname, with health and metrics
+endpoints. In PostgreSQL mode, sessions and submitted results survive restarts
+and are shared by replicas. Unfinished sessions expire after 30 minutes.
+Submitted display names and scores are public; names are unverified and the demo
+has no accounts or bot prevention. Structured logs record actual requests and service lifecycle events;
+no synthetic background requests or errors are generated.
 
 ### Endpoints
 
 | Path | What it does |
 | --- | --- |
-| `/` | HTML page naming the tenant, pod, and namespace serving it |
-| `/api/hello` | the same as JSON |
+| `/` | Next.js matching game, feature hints and leaderboard |
+| `/api/features` | Kupe capabilities and learning links |
+| `POST /api/games` | Create a shuffled game with a private deck |
+| `GET /api/games/{id}` | Resume an unexpired game |
+| `POST /api/games/{id}/flip` | Reveal a card with `{ "index": 0 }` |
+| `POST /api/games/{id}/score` | Save a completed game with `{ "name": "Player" }` |
+| `/api/leaderboard` | Top ten results, ranked by moves then completion time |
+| `/api/hello` | Service, tenant and pod information as JSON |
 | `/api/work?ms=N` | burns roughly N milliseconds of CPU (default 50, capped at 1000) |
 | `/healthz`, `/readyz` | probes |
 | `/metrics` | Prometheus metrics, scraped automatically |
 
 ## Autoscaling
 
-Turn it on and the chart adds a `HorizontalPodAutoscaler` and stops managing
+Enable `database.enabled=true` first: practice mode supports one replica.
+Turn autoscaling on and the chart adds a `HorizontalPodAutoscaler` and stops managing
 the replica count:
 
 ```yaml
@@ -166,8 +260,12 @@ quota is reached, whatever `maxReplicas` says.
 
 ## Repo layout
 
-* `cmd/hello-kupe` - the app
+* `web` - Next.js frontend, statically exported and served by Go
+* `cmd/hello-kupe`, `internal/game` - the API and server-controlled game rules
+* `internal/binding`, `internal/migrate` - database bindings and schema migrations
 * `chart` - the Helm chart used by Argo CD and local installs
+* `infra` - [Terraform/OpenTofu infrastructure](infra/README.md): cluster, managed
+  PostgreSQL database and database bindings
 * `samples/managed-database` - a Go API, migration Job and React frontend using
   a Kupe managed PostgreSQL database
 * `samples/registry` - build this app's image, push it to your tenant's Kupe
@@ -175,5 +273,20 @@ quota is reached, whatever `maxReplicas` says.
 
 ## Local development
 
-For local code checks, use `make test`, `make gosec`, `make govulncheck`,
-and `make helm-lint`.
+For the complete app with PostgreSQL in local Kubernetes, run `make kind-dev`
+and open `http://localhost:18080`. This uses an isolated kind cluster, two app
+replicas and the same Helm chart and database-binding layout as Kupe.
+See [local development](docs/local-development.md#kubernetes-with-kind) for
+requirements, rebuilds and cleanup.
+
+See [local development](docs/local-development.md) for practice mode, local
+PostgreSQL, hot reload and verification. Quick start:
+
+```bash
+make dev
+```
+
+Open `http://localhost:3000`. Frontend dependencies are installed automatically;
+Ctrl+C stops both servers. Run `make test`, `make web-test`, `make web-build`
+and `make helm-lint` for the core checks. `make gosec` and `make govulncheck`
+run the Go security checks.

@@ -2,3 +2,22 @@ bin/
 dist/
 /hello-kupe
 .tmp/
+
+# Local Terraform/OpenTofu working files and credentials.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+
+# Frontend build output and local environment.
+**/node_modules/
+web/.next/
+web/out/
+web/*.tsbuildinfo
+.env
+.env.*
+!.env.example

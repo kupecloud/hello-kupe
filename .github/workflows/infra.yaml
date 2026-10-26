@@ -1,0 +1,21 @@
+name: Infrastructure
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_wrapper: false
+      # No cloud credentials: only download providers and validate schemas.
+      - run: tofu fmt -check infra
+      - run: tofu -chdir=infra init -backend=false -input=false
+      - run: tofu -chdir=infra validate
+      - run: node --test scripts/cloud.test.mjs

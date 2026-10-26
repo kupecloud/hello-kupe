@@ -1,0 +1,19 @@
+# Local development only. Kupe deployments use the managed database in infra/.
+services:
+  postgres:
+    image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    environment:
+      POSTGRES_DB: hello_kupe
+      POSTGRES_PASSWORD: local-postgres
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./scripts/local-postgres/init.sql:/docker-entrypoint-initdb.d/hello-kupe.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hello_kupe"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  postgres-data:

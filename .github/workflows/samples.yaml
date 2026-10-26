@@ -63,6 +63,7 @@ jobs:
     name: managed-database web tests
     uses: kupecloud/github-workflows/.github/workflows/node-unit-tests.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
     with:
+      runs-on: ubuntu-latest
       working-directory: samples/managed-database/web
       upload-coverage: false
 
@@ -71,12 +72,14 @@ jobs:
     name: managed-database web build
     uses: kupecloud/github-workflows/.github/workflows/node-build.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
     with:
+      runs-on: ubuntu-latest
       working-directory: samples/managed-database/web
 
   managed-database-helm-lint:
     name: managed-database Helm lint
     uses: kupecloud/github-workflows/.github/workflows/helm-lint.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
     with:
+      runs-on: ubuntu-latest
       chart-path: samples/managed-database/chart
       lint-args: >-
         --set tenant=example-tenant --set cluster=example

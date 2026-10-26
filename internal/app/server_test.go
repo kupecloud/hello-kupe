@@ -61,7 +61,6 @@ func TestRunGracefulShutdown(t *testing.T) {
 		PodName:      "test",
 		PodNamespace: "test",
 		Port:         port,
-		LogInterval:  time.Hour, // keep the synthetic logger quiet during the test
 	}
 
 	srv, err := NewServer(cfg, io.Discard)
