@@ -10,7 +10,7 @@ RUN npm run build
 # Must be >= the `go` directive in go.mod — this image sets GOTOOLCHAIN=local,
 # so an older builder hard-fails with "go.mod requires go >= X". Bump in
 # lockstep with any go.mod bump.
-FROM golang:1.26.10-alpine3.23@sha256:0525c952defebc693cdaf62cdf43afa32be5a7f377e99260642ea19c240c708e AS builder
+FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS builder
 
 WORKDIR /src
 

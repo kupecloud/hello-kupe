@@ -1,0 +1,23 @@
+# Builds the image in this repository and pushes it to your Kupe registry
+# on every push to the default branch.
+#
+# Set in the project's settings (Settings > CI/CD > Variables), each protected:
+#   KUPE_TENANT             your tenant name
+#   KUPE_REGISTRY_USERNAME  the access token's username (kupe+<tenant>+tok-...)
+#   KUPE_REGISTRY_TOKEN     the access token's secret (kupecr_...), also masked
+# Create a push token with:
+#   kupe registry token create --name gitlab-ci --access push -o json
+push-to-kupe:
+  image: docker:29.9.2
+  services:
+    - docker:29.9.2-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    # Change hello-kupe to the repository name you push to.
+    IMAGE: registry.kupe.cloud/$KUPE_TENANT/hello-kupe:$CI_COMMIT_SHORT_SHA
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - printf '%s' "$KUPE_REGISTRY_TOKEN" | docker login registry.kupe.cloud --username "$KUPE_REGISTRY_USERNAME" --password-stdin
+    - docker build --platform linux/amd64 -t "$IMAGE" .
+    - docker push "$IMAGE"

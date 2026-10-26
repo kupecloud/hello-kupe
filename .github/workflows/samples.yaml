@@ -4,6 +4,10 @@ name: Samples
 # workflows run from the repository root and have no working-directory input,
 # so the Go checks run here with the same tools and versions they use. The
 # Node and Helm checks use the shared workflows, which take a path.
+#
+# samples/registry has no code of its own: it deploys the root chart with an
+# image from the Kupe registry, so its jobs check that render and the
+# Terraform formatting.
 
 on:
   workflow_call:
@@ -103,3 +107,38 @@ jobs:
         env:
           DOCKERFILE: ${{ matrix.dockerfile }}
         run: docker build -f "$DOCKERFILE" .
+
+  # The registry sample's deploy step: the root chart with a Kupe registry
+  # image must render with no imagePullSecrets, because a connected cluster
+  # pulls without them. Nothing is pushed from this repository.
+  registry-chart:
+    name: registry sample chart render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Render the chart with a registry image
+        run: |
+          helm template hello-kupe ./chart \
+            --set tenant=acme --set cluster=prod \
+            --set image.repository=registry.kupe.cloud/acme/hello-kupe \
+            --set image.tag=1.0.0 > "$RUNNER_TEMP/registry-render.yaml"
+          grep -q 'image: "registry.kupe.cloud/acme/hello-kupe:1.0.0"' "$RUNNER_TEMP/registry-render.yaml"
+          if grep -n imagePullSecrets "$RUNNER_TEMP/registry-render.yaml"; then
+            echo "the chart renders imagePullSecrets; a connected cluster needs none" >&2
+            exit 1
+          fi
+
+  registry-terraform-fmt:
+    name: registry sample terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive samples/registry/terraform

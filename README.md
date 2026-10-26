@@ -268,6 +268,8 @@ quota is reached, whatever `maxReplicas` says.
   PostgreSQL database and database bindings
 * `samples/managed-database` - a Go API, migration Job and React frontend using
   a Kupe managed PostgreSQL database
+* `samples/registry` - build this app's image, push it to your tenant's Kupe
+  registry and run it on a connected cluster with no pull Secret
 
 ## Local development
 
