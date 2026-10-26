@@ -2,24 +2,24 @@ package app
 
 import "testing"
 
-func TestParsePositiveIntEnv(t *testing.T) {
+func TestParsePortEnv(t *testing.T) {
 	t.Run("returns fallback when unset", func(t *testing.T) {
-		t.Setenv("TEST_PORT", "")
-		if got := parsePositiveIntEnv("TEST_PORT", 8080); got != 8080 {
+		t.Setenv("PORT", "")
+		if got := parsePortEnv(); got != 8080 {
 			t.Fatalf("expected fallback 8080, got %d", got)
 		}
 	})
 
 	t.Run("returns parsed value", func(t *testing.T) {
-		t.Setenv("TEST_PORT", "9090")
-		if got := parsePositiveIntEnv("TEST_PORT", 8080); got != 9090 {
+		t.Setenv("PORT", "9090")
+		if got := parsePortEnv(); got != 9090 {
 			t.Fatalf("expected 9090, got %d", got)
 		}
 	})
 
 	t.Run("returns fallback for invalid values", func(t *testing.T) {
-		t.Setenv("TEST_PORT", "nope")
-		if got := parsePositiveIntEnv("TEST_PORT", 8080); got != 8080 {
+		t.Setenv("PORT", "nope")
+		if got := parsePortEnv(); got != 8080 {
 			t.Fatalf("expected fallback 8080, got %d", got)
 		}
 	})
@@ -32,7 +32,6 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("POD_NAME", "hello-kupe-123")
 	t.Setenv("POD_NAMESPACE", "hello")
 	t.Setenv("PORT", "8081")
-	t.Setenv("LOG_INTERVAL_SECONDS", "9")
 
 	cfg := LoadConfigFromEnv()
 
@@ -47,8 +46,5 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	}
 	if cfg.Port != 8081 {
 		t.Fatalf("expected port 8081, got %d", cfg.Port)
-	}
-	if cfg.LogInterval.String() != "9s" {
-		t.Fatalf("expected log interval 9s, got %s", cfg.LogInterval)
 	}
 }

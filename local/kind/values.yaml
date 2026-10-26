@@ -1,0 +1,17 @@
+# Local kind only: use the same app chart and binding layout as Kupe.
+tenant: local
+cluster: kind
+replicaCount: 2
+image:
+  repository: hello-kupe
+  tag: kind-local
+  pullPolicy: Never
+httpRoute:
+  enabled: false
+  hostname: hello-kupe.local
+database:
+  enabled: true
+  readwriteSecretName: hello-kupe-db-readwrite
+  ownerSecretName: hello-kupe-db-owner
+migrations:
+  namespace: hello-kupe-migrate

@@ -18,6 +18,14 @@ permissions:
   contents: read
 
 jobs:
+  infra:
+    name: Infrastructure
+    uses: ./.github/workflows/infra.yaml
+
+  game:
+    name: Game
+    uses: ./.github/workflows/game.yaml
+
   go-lint:
     name: Go Lint
     uses: ./.github/workflows/go-lint.yaml
@@ -34,6 +42,7 @@ jobs:
     name: RBAC Secrets Audit
     uses: kupecloud/github-workflows/.github/workflows/helm-rbac-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
     with:
+      runs-on: ubuntu-latest
       chart-path: chart
       template-args: --set tenant=example-tenant --set cluster=example
       release-name: hello-kupe
@@ -42,6 +51,7 @@ jobs:
     name: Pod Automount Audit
     uses: kupecloud/github-workflows/.github/workflows/helm-automount-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
     with:
+      runs-on: ubuntu-latest
       chart-path: chart
       template-args: --set tenant=example-tenant --set cluster=example
       release-name: hello-kupe
@@ -83,8 +93,12 @@ jobs:
     name: Version
     needs:
       - gosec
+      - game
+      - infra
       - rbac-audit
     uses: kupecloud/github-workflows/.github/workflows/semantic-release-preview.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    with:
+      runs-on: ubuntu-latest
     permissions:
       contents: write
     secrets: inherit
@@ -110,6 +124,7 @@ jobs:
       - publish-image
     uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
     with:
+      runs-on: ubuntu-latest
       image-digest: ${{ needs.publish-image.outputs.digest }}
       image-version: ${{ needs.version.outputs.new_release_version }}
     permissions:

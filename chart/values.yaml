@@ -1,5 +1,8 @@
 replicaCount: 1
 
+nodeSelector: {}
+tolerations: []
+
 nameOverride: ""
 fullnameOverride: ""
 
@@ -79,3 +82,23 @@ podAnnotations:
   k8s.grafana.com/metrics.path: "/metrics"
   # metrics.portNumber is rendered from service.port in the deployment
   # template so it can't drift from the container port.
+
+# Without a database, the game runs in temporary, single-replica practice mode.
+# infra/ creates these Secrets in the app and migration namespaces.
+database:
+  enabled: false
+  bindingRoot: /bindings
+  readwriteSecretName: todo-db-readwrite
+  ownerSecretName: todo-db-owner
+
+migrations:
+  namespace: hello-kupe-migrate
+  backoffLimit: 3
+  activeDeadlineSeconds: 180
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi

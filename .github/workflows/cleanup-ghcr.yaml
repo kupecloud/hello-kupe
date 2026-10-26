@@ -26,5 +26,6 @@ jobs:
     permissions:
       packages: write
     with:
+      runs-on: ubuntu-latest
       retention_days: ${{ inputs.retention_days || 7 }}
       dry_run: ${{ inputs.dry_run || false }}

@@ -1,6 +1,12 @@
 name: Publish Image
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Unique image tag (for example demo-20261026). Does not create a release.
+        required: true
+        type: string
   workflow_call:
     inputs:
       version:
@@ -21,5 +27,6 @@ jobs:
   publish:
     uses: kupecloud/github-workflows/.github/workflows/publish-image.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
     with:
+      runs-on: ubuntu-latest
       version: ${{ inputs.version }}
     secrets: inherit

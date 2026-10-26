@@ -1,0 +1,23 @@
+# Always-on public game, independent of the captured tenant deployment.
+# Practice mode intentionally has no database and requires one replica.
+replicaCount: 1
+tenant: hello-kupe
+cluster: ""
+httpRoute:
+  hostname: hello.kupe.cloud
+nodeSelector:
+  kupe.cloud/pool-type: core
+tolerations:
+  - key: kupe.cloud/pool-type
+    operator: Equal
+    value: core
+    effect: NoSchedule
+database:
+  enabled: false
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi

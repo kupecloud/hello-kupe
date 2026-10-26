@@ -13,7 +13,8 @@ spec:
   hostnames:
     - {{ include "hello-kupe.hostname" . | quote }}
   rules:
-    # Expose only application paths — /metrics, /healthz, /readyz are
+    # Expose application routes and generated frontend assets.
+    # /metrics, /healthz and /readyz remain
     # internal-only (scraped by Alloy, probed by kubelet).
     - matches:
         - path:
@@ -22,6 +23,12 @@ spec:
         - path:
             type: Exact
             value: /
+        - path:
+            type: PathPrefix
+            value: /_next/static
+        - path:
+            type: Exact
+            value: /kupe-mark.svg
       backendRefs:
         - name: {{ include "hello-kupe.fullname" . }}
           port: 80

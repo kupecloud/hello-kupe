@@ -1,0 +1,10 @@
+tenant = "your-tenant"
+
+# Fresh demo tenant. Existing deployments should keep their current names.
+cluster_name       = "demo"
+database_name      = "hello-kupe-db"
+enable_registry    = true
+enable_build_token = true
+
+# Optional overrides:
+# enable_reports  = true

@@ -32,7 +32,7 @@ it (see [Clean up](#clean-up)) or keep it private, as described under
 * `internal/migrate/migrations` - SQL migrations, embedded in the binary
 * `cmd/todo-web`, `web/` - the frontend and the small Go server that serves it
 * `chart/` - Helm chart for all three components
-* `terraform/` - the cluster, the database and both bindings
+* [`../../infra/`](../../infra/README.md) - the cluster, the database and bindings
 * `verify/db-probe.yaml` - a Pod that checks whether a namespace can reach the database
 * `scripts/local-smoke.sh` - the whole flow in Docker, without a Kupe cluster
 
@@ -46,14 +46,15 @@ it (see [Clean up](#clean-up)) or keep it private, as described under
 
 ## 1. Create the database
 
-With Terraform or OpenTofu, `terraform/main.tf` creates a cluster named `todo`,
-a database named `todo-db`, and both bindings:
+With Terraform or OpenTofu, the repository-level [`infra/`](../../infra/README.md)
+configuration creates a cluster named `todo`, a database named `todo-db`, and
+both bindings. From this sample directory:
 
 ```bash
-cd terraform
 export KUPE_API_KEY=<api key>
-tofu init
-tofu apply -var tenant=<tenant>
+tofu -chdir=../../infra init
+tofu -chdir=../../infra apply -var tenant=<tenant> \
+  -var app_namespace=todo-api -var migration_namespace=todo-migrate
 ```
 
 To use a cluster you already have, delete the `kupe_cluster` resource and set
@@ -437,7 +438,8 @@ kupe database delete todo-db
 `helm uninstall` leaves the last `todo-migrate` Job behind, because Helm does
 not track hook resources; deleting the namespace removes it.
 
-With Terraform or OpenTofu, uninstall the chart, then remove the `lifecycle`
+With Terraform or OpenTofu, run infrastructure commands from the repository-level
+`infra/` directory. Uninstall the chart, then remove the `lifecycle`
 block from `kupe_database.todo`, set `deletion_protection = false`, run
 `tofu apply`, and then `tofu destroy`. That destroys the `todo` cluster as well
 as the database and its bindings. If you pointed the bindings at a cluster you

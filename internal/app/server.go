@@ -2,31 +2,32 @@ package app
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"log/slog"
-	"math/big"
 	"net/http"
+	"os"
+	"path/filepath"
+
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kupecloud/hello-kupe/internal/game"
 )
 
 type Server struct {
 	cfg           Config
 	startedAt     time.Time
-	template      *template.Template
+	games         game.Store
 	logger        *slog.Logger
 	mu            sync.Mutex
 	requestCounts map[requestMetricKey]uint64
-	eventCounts   map[string]uint64
 }
 
 type requestMetricKey struct {
@@ -37,11 +38,6 @@ type requestMetricKey struct {
 
 type requestMetricEntry struct {
 	Key   requestMetricKey
-	Count uint64
-}
-
-type eventMetricEntry struct {
-	Level string
 	Count uint64
 }
 
@@ -65,37 +61,39 @@ func Run(ctx context.Context, cfg Config, output io.Writer) error {
 }
 
 func NewServer(cfg Config, output io.Writer) (*Server, error) {
-	tpl, err := newHomeTemplate()
+	games, err := openGameStore(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("parse home template: %w", err)
+		return nil, fmt.Errorf("configure database: %w", err)
 	}
 
 	return &Server{
 		cfg:           cfg,
 		startedAt:     time.Now().UTC(),
-		template:      tpl,
+		games:         games,
 		logger:        slog.New(slog.NewJSONHandler(output, nil)),
 		requestCounts: make(map[requestMetricKey]uint64),
-		eventCounts:   make(map[string]uint64),
 	}, nil
 }
 
 func (a *Server) Run(ctx context.Context) error {
+	defer a.games.Close()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", a.handleHome)
 	mux.HandleFunc("/api/hello", a.handleHello)
 	mux.HandleFunc("/api/work", a.handleWork)
 	mux.HandleFunc("/healthz", handleHealth)
-	mux.HandleFunc("/readyz", handleHealth)
+	mux.HandleFunc("/readyz", a.handleReady)
+	game.Register(mux, a.games, a.logger)
 	mux.HandleFunc("/metrics", a.handleMetrics)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", a.cfg.Port),
-		Handler:           a.loggingMiddleware(mux),
+		Handler:           a.loggingMiddleware(game.Guard(mux, a.cfg.DevelopmentOrigin)),
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	go a.backgroundLogger(ctx)
 
 	a.log(ctx, slog.LevelInfo, "service started",
 		slog.String("service", a.cfg.ServiceName),
@@ -148,13 +146,51 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") {
 		http.NotFound(w, r)
 		return
 	}
+	root := a.cfg.WebRoot
+	if root == "" {
+		root = "web/out"
+	}
+	// Only expose generated frontend files, with no directory listings.
+	clean := filepath.Clean("/" + r.URL.Path)
+	filename := filepath.Join(root, clean)
+	info, err := os.Stat(filename)
+	if err == nil && info.IsDir() {
+		filename = filepath.Join(filename, "index.html")
+		_, err = os.Stat(filename)
+	}
+	if err != nil {
+		if r.URL.Path == "/" {
+			http.Error(w, "Build the frontend with make web-build before running Hello Kupe.", http.StatusServiceUnavailable)
+		} else {
+			http.NotFound(w, r)
+		}
+		return
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if strings.HasPrefix(r.URL.Path, "/_next/static/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	http.ServeFile(w, r, filename)
+}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = a.template.Execute(w, a.cfg)
+func (a *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.games.Ping(ctx); err != nil {
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	handleHealth(w, r)
 }
 
 func (a *Server) handleHello(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +316,7 @@ func (a *Server) loggingMiddleware(next http.Handler) http.Handler {
 			slog.String("tenant", a.cfg.Tenant),
 			slog.String("request_id", fmt.Sprintf("req-%d", started.UnixNano())),
 			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
+			slog.String("path", routeLabel(r.URL.Path)),
 			slog.Int("status", recorder.status),
 			slog.Int64("duration_ms", duration.Milliseconds()),
 			slog.String("remote_addr", r.RemoteAddr),
@@ -293,66 +329,36 @@ func (a *Server) loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (a *Server) backgroundLogger(ctx context.Context) {
-	ticker := time.NewTicker(a.cfg.LogInterval)
-	defer ticker.Stop()
-
-	levels := []slog.Level{slog.LevelInfo, slog.LevelInfo, slog.LevelInfo, slog.LevelInfo, slog.LevelWarn, slog.LevelError, slog.LevelDebug}
-	statuses := []int{200, 200, 200, 201, 301, 400, 404, 500, 503}
-	methods := []string{"GET", "GET", "GET", "POST", "PUT", "DELETE"}
-	paths := []string{"/api/users", "/api/orders", "/api/products", "/api/health", "/api/auth/login", "/api/settings"}
-	users := []string{"user-1", "user-2", "user-3", "admin", "service-account"}
-
-	i := 0
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			i++
-			level := levels[randomIndex(len(levels))]
-			status := statuses[randomIndex(len(statuses))]
-			method := methods[randomIndex(len(methods))]
-			path := paths[randomIndex(len(paths))]
-			duration := randomIndex(500) + 1
-			user := users[randomIndex(len(users))]
-
-			a.recordEvent(level.String())
-			a.log(ctx, level, fmt.Sprintf("%s %s", method, path),
-				slog.String("service", a.cfg.ServiceName),
-				slog.String("tenant", a.cfg.Tenant),
-				slog.String("request_id", fmt.Sprintf("bg-%d", i)),
-				slog.String("method", method),
-				slog.String("path", path),
-				slog.Int("status", status),
-				slog.Int("duration_ms", duration),
-				slog.String("user", user),
-				slog.String("pod", a.cfg.PodName),
-				slog.String("namespace", a.cfg.PodNamespace),
-				slog.Bool("synthetic", true),
-				slog.String("public_url", a.cfg.PublicURL),
-				slog.String("message_kind", "background-demo-log"),
-			)
-		}
-	}
-}
-
 // knownRoutes is the fixed set of routes registered on the mux. The metric
 // path label is bounded to this set so that arbitrary client-supplied paths
 // (e.g. scanner traffic hitting "/wp-login.php") cannot mint new label sets.
 // Unbounded label cardinality leaks pod memory and explodes time series in the
 // shared metrics backend — bound the label to a known route template instead.
 var knownRoutes = map[string]struct{}{
-	"/":          {},
-	"/api/hello": {},
-	"/healthz":   {},
-	"/readyz":    {},
-	"/metrics":   {},
+	"/":                {},
+	"/api/hello":       {},
+	"/api/work":        {},
+	"/api/games":       {},
+	"/api/features":    {},
+	"/api/leaderboard": {},
+	"/healthz":         {},
+	"/readyz":          {},
+	"/metrics":         {},
 }
 
 // routeLabel maps a raw request path to a bounded metric label. Known routes
 // keep their path; everything else collapses into a single "other" bucket.
 func routeLabel(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 3 && parts[0] == "api" && parts[1] == "games" {
+		if len(parts) == 3 {
+			return "/api/games/{id}"
+		}
+		if len(parts) == 4 && (parts[3] == "flip" || parts[3] == "score") {
+			return "/api/games/{id}/" + parts[3]
+		}
+	}
+
 	if _, ok := knownRoutes[path]; ok {
 		return path
 	}
@@ -393,16 +399,10 @@ func (a *Server) recordRequest(method, path string, status int) {
 	a.requestCounts[key]++
 }
 
-func (a *Server) recordEvent(level string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.eventCounts[level]++
-}
-
 func (a *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
-	requestCounts, eventCounts := a.snapshotMetrics()
+	requestCounts := a.snapshotMetrics()
 	uptime := time.Since(a.startedAt).Seconds()
 
 	var builder strings.Builder
@@ -428,18 +428,10 @@ func (a *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 			entry.Count)
 	}
 
-	builder.WriteString("# HELP hello_kupe_background_events_total Total synthetic background events emitted by hello-kupe.\n")
-	builder.WriteString("# TYPE hello_kupe_background_events_total counter\n")
-	for _, entry := range eventCounts {
-		fmt.Fprintf(&builder, "hello_kupe_background_events_total{level=%q} %d\n",
-			escapeLabelValue(entry.Level),
-			entry.Count)
-	}
-
 	_, _ = w.Write([]byte(builder.String()))
 }
 
-func (a *Server) snapshotMetrics() ([]requestMetricEntry, []eventMetricEntry) {
+func (a *Server) snapshotMetrics() []requestMetricEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -457,15 +449,7 @@ func (a *Server) snapshotMetrics() ([]requestMetricEntry, []eventMetricEntry) {
 		return requests[i].Key.Status < requests[j].Key.Status
 	})
 
-	events := make([]eventMetricEntry, 0, len(a.eventCounts))
-	for level, count := range a.eventCounts {
-		events = append(events, eventMetricEntry{Level: level, Count: count})
-	}
-	sort.Slice(events, func(i, j int) bool {
-		return events[i].Level < events[j].Level
-	})
-
-	return requests, events
+	return requests
 }
 
 func (a *Server) log(ctx context.Context, level slog.Level, message string, attrs ...slog.Attr) {
@@ -477,17 +461,4 @@ func escapeLabelValue(value string) string {
 	value = strings.ReplaceAll(value, "\n", `\n`)
 	value = strings.ReplaceAll(value, `"`, `\"`)
 	return value
-}
-
-func randomIndex(limit int) int {
-	if limit <= 1 {
-		return 0
-	}
-
-	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(limit)))
-	if err != nil {
-		return 0
-	}
-
-	return int(n.Int64())
 }

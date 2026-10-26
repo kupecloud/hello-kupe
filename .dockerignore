@@ -1,0 +1,12 @@
+.git
+.tmp
+**/node_modules
+**/.next
+**/out
+**/.terraform
+**/*.tfstate*
+**/*.tfvars
+**/*.tfplan
+**/.env*
+hello-kupe
+samples

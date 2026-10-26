@@ -1,3 +1,6 @@
+{{- if and (not .Values.database.enabled) (or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1)) }}
+{{- fail "Practice mode supports one replica. Enable database.enabled with a managed database before scaling." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,6 +36,14 @@ spec:
         {{- toYaml $annotations | nindent 8 }}
     spec:
       # The app never calls the Kubernetes API, so don't mount a SA token.
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         # Required by the platform's `platform-require-seccomp` Kyverno
@@ -58,6 +69,12 @@ spec:
               value: {{ .Values.tenant | quote }}
             - name: PUBLIC_URL
               value: {{ printf "https://%s" (include "hello-kupe.hostname" .) | quote }}
+            {{- if .Values.database.enabled }}
+            - name: SERVICE_BINDING_ROOT
+              value: {{ .Values.database.bindingRoot | quote }}
+            - name: DATABASE_BINDING
+              value: {{ .Values.database.readwriteSecretName | quote }}
+            {{- end }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -66,6 +83,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+          {{- if .Values.database.enabled }}
+          volumeMounts:
+            - name: database
+              mountPath: {{ printf "%s/%s" .Values.database.bindingRoot .Values.database.readwriteSecretName | quote }}
+              readOnly: true
+          {{- end }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
@@ -83,3 +110,9 @@ spec:
             runAsNonRoot: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.database.enabled }}
+      volumes:
+        - name: database
+          secret:
+            secretName: {{ .Values.database.readwriteSecretName }}
+      {{- end }}
