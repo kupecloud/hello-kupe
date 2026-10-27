@@ -1,0 +1,101 @@
+name: Node Build
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner label (ubuntu-latest by default).
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      node-version:
+        description: Node.js version to install
+        required: false
+        default: "22"
+        type: string
+      working-directory:
+        description: Directory containing package.json
+        required: false
+        default: "."
+        type: string
+      build-script:
+        description: npm script name for the build step
+        required: false
+        default: "build"
+        type: string
+      upload-artifact:
+        description: Upload the build output as a workflow artifact
+        required: false
+        default: false
+        type: boolean
+      artifact-path:
+        description: Path (relative to working-directory) to upload when upload-artifact is true
+        required: false
+        default: "dist"
+        type: string
+      artifact-name:
+        description: Name of the uploaded artifact
+        required: false
+        default: "build-output"
+        type: string
+      artifact-retention-days:
+        description: Days to retain the uploaded artifact
+        required: false
+        default: 7
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ inputs.runs-on }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run build
+        id: build
+        env:
+          BUILD_SCRIPT: ${{ inputs.build-script }}
+        run: npm run "$BUILD_SCRIPT"
+
+      - name: Build summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            {
+              echo "### Build"
+              echo "Node build passed."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Build"
+              echo "Node build failed."
+              echo ""
+              echo "- Review the job logs for full details."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload build artifact
+        if: inputs.upload-artifact && steps.build.outcome == 'success' && hashFiles(format('{0}/{1}/**', inputs.working-directory, inputs.artifact-path)) != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
+          retention-days: ${{ inputs.artifact-retention-days }}

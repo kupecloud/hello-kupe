@@ -1,0 +1,70 @@
+name: Helm Lint
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner label (ubuntu-latest by default).
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      chart-path:
+        description: Path to the Helm chart directory
+        required: true
+        type: string
+      lint-args:
+        description: Additional arguments passed to helm lint
+        required: false
+        default: ""
+        type: string
+      helm-version:
+        description: Helm version used to lint the chart
+        required: false
+        # renovate: github-releases=helm/helm
+        default: v4.3.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  helm-lint:
+    name: helm lint
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ inputs.helm-version }}
+
+      - name: Run helm lint
+        id: helm-lint
+        shell: bash
+        env:
+          CHART_PATH: ${{ inputs.chart-path }}
+          LINT_ARGS: ${{ inputs.lint-args }}
+        run: |
+          set -euo pipefail
+          eval "args=($LINT_ARGS)"
+          helm lint "$CHART_PATH" "${args[@]}"
+
+      - name: helm lint summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.helm-lint.outcome }}" = "success" ]; then
+            {
+              echo "### helm lint"
+              echo "Helm lint passed."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### helm lint"
+              echo "Helm lint failed."
+              echo ""
+              echo "- Review the job logs for details."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

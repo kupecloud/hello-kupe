@@ -40,7 +40,7 @@ jobs:
 
   rbac-audit:
     name: RBAC Secrets Audit
-    uses: kupecloud/github-workflows/.github/workflows/helm-rbac-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
+    uses: ./.github/workflows/ci-helm-rbac-audit.yaml
     with:
       runs-on: ubuntu-latest
       chart-path: chart
@@ -49,7 +49,7 @@ jobs:
 
   automount-audit:
     name: Pod Automount Audit
-    uses: kupecloud/github-workflows/.github/workflows/helm-automount-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
+    uses: ./.github/workflows/ci-helm-automount-audit.yaml
     with:
       runs-on: ubuntu-latest
       chart-path: chart
@@ -96,7 +96,7 @@ jobs:
       - game
       - infra
       - rbac-audit
-    uses: kupecloud/github-workflows/.github/workflows/semantic-release-preview.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    uses: ./.github/workflows/ci-semantic-release-preview.yaml
     with:
       runs-on: ubuntu-latest
     permissions:
@@ -122,7 +122,7 @@ jobs:
     needs:
       - version
       - publish-image
-    uses: kupecloud/github-workflows/.github/workflows/semantic-release.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    uses: ./.github/workflows/ci-semantic-release.yaml
     with:
       runs-on: ubuntu-latest
       image-digest: ${{ needs.publish-image.outputs.digest }}
