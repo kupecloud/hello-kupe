@@ -20,7 +20,7 @@ const Lifetime = 30 * time.Minute
 
 var ErrNotFound = errors.New("game expired or not found; start a new game")
 var ErrInvalid = errors.New("invalid move")
-var ErrCapacity = errors.New("practice room is full; try again shortly")
+var ErrCapacity = errors.New("game room is full; try again shortly")
 
 // Feature is the short lesson unlocked by a matching pair.
 type Feature struct {
@@ -33,7 +33,7 @@ type Feature struct {
 
 var Features = []Feature{
 	{"domains", "Custom domains", "A proper address for your game.", "When deployed on Kupe, Hello Kupe gets a shareable Kupe address. Connect your own domain to give players a familiar link, such as play.your-domain.com, to this very game.", "https://docs.kupe.cloud/networking/custom-domains/"},
-	{"database", "Managed PostgreSQL", "The database behind this scoreboard.", "PostgreSQL stores Hello Kupe's game sessions and saved scores. The Go API reads the hall of fame from it, and app replicas share the same data, so an app restart doesn't erase the scoreboard.", "https://docs.kupe.cloud/platform/databases/"},
+	{"database", "Managed PostgreSQL", "A lasting home for game sessions and scores.", "Connect Kupe managed PostgreSQL to store game sessions and saved scores. App replicas can share the same data, keeping the scoreboard available across app restarts and releases.", "https://docs.kupe.cloud/platform/databases/"},
 	{"registry", "Container registry", "One image. The whole game.", "Hello Kupe's Next.js frontend and Go API ship together as one container image. Push your build to a Kupe managed registry, then let your cluster pull it to run this game.", "https://docs.kupe.cloud/"},
 	{"scaling", "Autoscaling", "More players. The same game.", "Run more copies of Hello Kupe when you need extra capacity. With PostgreSQL connected, every copy shares the same games and scores. Enable autoscaling to add replicas as CPU demand rises.", "https://github.com/kupecloud/hello-kupe#autoscaling"},
 	{"observability", "Logs & metrics", "See how this game is running.", "Starting a game, flipping a card and saving a score all make real API requests. Explore their logs, request counts and response times in Grafana to see how Hello Kupe is running.", "https://docs.kupe.cloud/get-started/observe-your-app/"},

@@ -712,24 +712,6 @@ h2 {
   text-align: center;
   margin: 10px 0 0;
 }
-.database-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-top: 1px solid light-dark(#ceb0e6, #5b4375);
-  color: light-dark(#78518f, #c4afda);
-  padding: 13px 18px;
-  background: light-dark(#f2e7fc, #2b1d3c);
-  font-size: 9px;
-}
-.database-note > svg {
-  color: light-dark(#9d5dc3, #cc9bec);
-}
-.database-note .live-dot {
-  width: 4px;
-  height: 4px;
-  margin-left: auto;
-}
 .discovery {
   padding: 21px;
   background: linear-gradient(
@@ -889,21 +871,6 @@ footer a {
 .score-result > span {
   font-size: 10px;
   color: light-dark(#8a7099, #baa3ca);
-}
-.personal-best {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  background: light-dark(#edddfb, #392447);
-  padding: 10px 8px;
-  border-radius: 5px;
-  margin-top: 12px;
-  color: light-dark(#794496, #d9b1f2);
-  font-size: 8px;
-}
-.personal-best strong {
-  margin-left: auto;
-  font-size: 9px;
 }
 .board-loading {
   font-size: 11px;

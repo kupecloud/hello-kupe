@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -120,8 +121,8 @@ type featureTestStore struct {
 
 func (s featureTestStore) Persistent() bool { return s.persistent }
 
-func TestFeatureHintReflectsActualStorage(t *testing.T) {
-	// Alternate modes to catch accidental changes to shared feature definitions.
+func TestFeaturesAreIdenticalAcrossStorageModes(t *testing.T) {
+	var expected []Feature
 	for _, persistent := range []bool{false, true, false, true} {
 		mux := http.NewServeMux()
 		Register(mux, featureTestStore{NewMemory(), persistent}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -137,17 +138,15 @@ func TestFeatureHintReflectsActualStorage(t *testing.T) {
 		if len(features) != Pairs {
 			t.Fatal("missing feature hints")
 		}
-		found := false
-		for _, feature := range features {
-			if feature.ID == "database" {
-				found = true
-				if strings.Contains(feature.Detail, "practice mode") == persistent {
-					t.Fatalf("database hint does not reflect persistence=%v: %s", persistent, feature.Detail)
-				}
-			}
+		if expected == nil {
+			expected = features
+		} else if !reflect.DeepEqual(features, expected) {
+			t.Fatalf("feature presentation changed for persistence=%v", persistent)
 		}
-		if !found {
-			t.Fatal("database hint missing")
+		for _, feature := range features {
+			if strings.Contains(strings.ToLower(feature.Description+" "+feature.Detail), "practice") {
+				t.Fatalf("storage-mode wording in %s", feature.ID)
+			}
 		}
 	}
 }

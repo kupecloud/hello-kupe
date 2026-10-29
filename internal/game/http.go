@@ -19,16 +19,7 @@ type handler struct {
 func Register(mux *http.ServeMux, store Store, logger *slog.Logger) {
 	h := &handler{store, logger}
 	mux.HandleFunc("GET /api/features", func(w http.ResponseWriter, _ *http.Request) {
-		features := append([]Feature(nil), Features...)
-		if !store.Persistent() {
-			for i := range features {
-				if features[i].ID == "database" {
-					features[i].Description = "Give this scoreboard a memory."
-					features[i].Detail = "Hello Kupe is currently in practice mode, using temporary memory. Its scoreboard resets when the app restarts. Connect managed PostgreSQL to keep game sessions and saved scores shared across restarts and app replicas."
-				}
-			}
-		}
-		respond(w, 200, features)
+		respond(w, 200, Features)
 	})
 	mux.HandleFunc("GET /api/leaderboard", h.leaderboard)
 	mux.HandleFunc("POST /api/games", h.create)

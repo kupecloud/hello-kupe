@@ -32,14 +32,12 @@ import {
 } from "lucide-react";
 import { useTheme } from "./useTheme";
 import {
-  better,
   formatTime,
   presentFeature,
   request,
   type Board,
   type Feature,
   type Game,
-  type Score,
 } from "./api";
 
 const icons = {
@@ -121,7 +119,6 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
   const [elapsed, setElapsed] = useState(0);
   const [lesson, setLesson] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [best, setBest] = useState<Score | null>(null);
   const [modal, setModal] = useState<Feature | null>(null);
   const [hostname, setHostname] = useState("your Kupe app");
   const [burst, setBurst] = useState<Burst | null>(null);
@@ -210,12 +207,6 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
   useEffect(() => {
     let live = true;
     setHostname(window.location.host);
-    try {
-      const saved = localStorage.getItem("kupe-best");
-      if (saved) setBest(JSON.parse(saved) as Score);
-    } catch {
-      /* Storage is optional. */
-    }
     async function load() {
       try {
         const data = await request<Feature[]>("/api/features");
@@ -379,6 +370,7 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!game || inFlight.current) return;
+    let restartAfterSave = false;
     inFlight.current = true;
     setBusy(true);
     setError("");
@@ -387,26 +379,15 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
         name: name.trim(),
       });
       apply(next);
-      const score: Score = {
-        name: name.trim(),
-        moves: next.moves,
-        duration_ms: next.elapsed_ms,
-      };
-      if (!best || better(score, best)) {
-        setBest(score);
-        try {
-          localStorage.setItem("kupe-best", JSON.stringify(score));
-        } catch {
-          /* Storage is optional. */
-        }
-      }
       await refreshBoard();
+      restartAfterSave = true;
     } catch (err) {
       setError(errorText(err));
     } finally {
       inFlight.current = false;
       setBusy(false);
     }
+    if (restartAfterSave) await start();
   }
 
   const matchedFeature = features.find((f) => f.id === lesson);
@@ -741,24 +722,6 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
                   <p className="ranking-note">
                     Fewest moves wins. Time breaks the tie.
                   </p>
-                  {best && (
-                    <div className="personal-best">
-                      <Sparkles size={15} />
-                      <span>Your best on this device</span>
-                      <strong>
-                        {best.moves} / {formatTime(best.duration_ms)}
-                      </strong>
-                    </div>
-                  )}
-                </div>
-                <div className="database-note">
-                  <Database size={16} />
-                  <span>
-                    {board?.persistent
-                      ? "Kept safe in managed PostgreSQL"
-                      : "Practice mode · scores reset on restart"}
-                  </span>
-                  {board?.persistent && <span className="live-dot" />}
                 </div>
               </section>
               <section
@@ -872,12 +835,7 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
                           <ArrowRight size={22} />
                         </button>
                       </div>
-                      <small>
-                        Your name and result will be public.{" "}
-                        {board?.persistent
-                          ? "Saved to Kupe managed PostgreSQL."
-                          : "Practice scores are temporary."}
-                      </small>
+                      <small>Your name and result will be public.</small>
                     </form>
                   )}
                   {error && (
