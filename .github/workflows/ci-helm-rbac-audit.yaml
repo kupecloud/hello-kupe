@@ -1,0 +1,151 @@
+name: Helm RBAC Audit
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner label (ubuntu-latest by default).
+        required: false
+        default: "ubuntu-latest"
+        type: string
+      chart-path:
+        description: Path to the Helm chart directory
+        required: true
+        type: string
+      template-args:
+        description: Arguments passed to helm template (e.g., "-f values.yaml -f values/prod.yaml")
+        required: false
+        default: ""
+        type: string
+      release-name:
+        description: Release name for helm template
+        required: false
+        default: "audit"
+        type: string
+      helm-version:
+        description: Helm version used to render the chart
+        required: false
+        # renovate: github-releases=helm/helm
+        default: v3.18.6
+        type: string
+      yq-version:
+        description: yq release to install (linux amd64 binary)
+        required: false
+        default: v4.52.5
+        type: string
+      yq-sha256:
+        description: >-
+          SHA-256 of yq_linux_amd64 for yq-version, from that release's
+          `checksums` file (SHA-256 column, see `checksums_hashes_order`).
+          Change it together with yq-version.
+        required: false
+        default: 75d893a0d5940d1019cb7cdc60001d9e876623852c31cfc6267047bc31149fa9
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  rbac-audit:
+    name: rbac secrets audit
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: ${{ inputs.helm-version }}
+
+      - name: Install yq
+        shell: bash
+        env:
+          YQ_VERSION: ${{ inputs.yq-version }}
+          YQ_SHA256: ${{ inputs.yq-sha256 }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bin"
+          dl="$(mktemp -d -p "$RUNNER_TEMP")"
+          mkdir -p "$bin"
+
+          fetch() {
+            local tool="$1" url="$2" want="$3" file="$4" got
+            if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::${tool}-sha256 must be a 64-character lowercase hex sha256, got '$want'"
+              exit 1
+            fi
+            curl -fsSLo "$file" "$url"
+            got="$(sha256sum < "$file")"
+            got="${got%% *}"
+            if [ "$got" != "$want" ]; then
+              echo "::error::${tool} sha256 mismatch for $url: expected $want, got $got. Set the ${tool}-sha256 input together with ${tool}-version."
+              exit 1
+            fi
+          }
+
+          fetch yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+            "$YQ_SHA256" "$dl/yq"
+          install -m 0755 "$dl/yq" "$bin/yq"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Render chart
+        shell: bash
+        env:
+          RELEASE_NAME: ${{ inputs.release-name }}
+          CHART_PATH: ${{ inputs.chart-path }}
+          TEMPLATE_ARGS: ${{ inputs.template-args }}
+        run: |
+          set -euo pipefail
+          eval "args=($TEMPLATE_ARGS)"
+          helm template "$RELEASE_NAME" "$CHART_PATH" "${args[@]}" > "$RUNNER_TEMP/rendered.yaml"
+
+      - name: Audit cluster-wide secrets access
+        id: rbac-audit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # shellcheck disable=SC2016
+          offenders=$(yq -N \
+            'select(.kind == "ClusterRole")
+            | select([.rules[]? | select(.resources != null) | .resources[]
+                | select(. == "secrets" or test("^\*$"))] | length > 0)
+            | .metadata.name' \
+            "$RUNNER_TEMP/rendered.yaml" | sort -u)
+
+          if [ -n "$offenders" ]; then
+            echo "::error::Rendered chart contains ClusterRoles with cluster-wide secrets access:"
+            echo "$offenders"
+            echo ""
+            echo "Cluster-wide secrets read is a blast-radius amplifier. Prefer"
+            echo "narrowing the rule to specific namespaces (a Role, not a"
+            echo "ClusterRole) or to named resources. This gate has no allowlist"
+            echo "input; if the cluster-wide grant is genuinely required, document"
+            echo "the justification in security_best_practices_report.md."
+            exit 1
+          fi
+          echo "OK: no cluster-wide secrets access in rendered ClusterRoles"
+
+      - name: rbac audit summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### RBAC Secrets Audit"
+            case "${{ steps.rbac-audit.outcome }}" in
+              success)
+                echo "No cluster-wide secrets access found in rendered ClusterRoles."
+                ;;
+              failure)
+                echo "**FAILED** — one or more ClusterRoles grant cluster-wide secrets access."
+                echo ""
+                echo "- Review the job logs for the list of offending ClusterRoles."
+                ;;
+              *)
+                echo "**NOT RUN** — an earlier step failed before the audit."
+                echo ""
+                echo "- Review the job logs for the failing step."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"

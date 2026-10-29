@@ -1,9 +1,9 @@
 name: Samples
 
-# Checks for samples/managed-database, a Go module of its own. The shared Go
+# Checks for samples/managed-database, a Go module of its own. The local Go
 # workflows run from the repository root and have no working-directory input,
 # so the Go checks run here with the same tools and versions they use. The
-# Node and Helm checks use the shared workflows, which take a path.
+# Node and Helm checks use local workflows, which take a path.
 #
 # samples/registry has no code of its own: it deploys the root chart with an
 # image from the Kupe registry, so its jobs check that render and the
@@ -43,15 +43,11 @@ jobs:
       - name: Run unit tests
         run: go test -race -timeout 120s ./...
 
-      # The shared go-lint workflow lints with this config when a repo has
-      # none of its own. It is pinned to the same github-workflows commit as
-      # the Node and Helm jobs below.
       - name: Run golangci-lint
         run: |
-          curl -sSfL -o "$RUNNER_TEMP/golangci.yaml" \
-            https://raw.githubusercontent.com/kupecloud/github-workflows/9e4df7e450d89d7f2efdd1997691cbd59ef26002/golangci-default.yaml
-          go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 \
-            run --timeout=10m --config "$RUNNER_TEMP/golangci.yaml" ./...
+          set -euo pipefail
+          go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+            run --timeout=10m --config "$GITHUB_WORKSPACE/.golangci.yaml" ./...
 
       - name: Run gosec
         run: go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...
@@ -61,7 +57,7 @@ jobs:
 
   managed-database-web-test:
     name: managed-database web tests
-    uses: kupecloud/github-workflows/.github/workflows/node-unit-tests.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    uses: ./.github/workflows/ci-node-unit-tests.yaml
     with:
       runs-on: ubuntu-latest
       working-directory: samples/managed-database/web
@@ -70,14 +66,14 @@ jobs:
   # npm run build is `tsc && vite build`, so this also type-checks.
   managed-database-web-build:
     name: managed-database web build
-    uses: kupecloud/github-workflows/.github/workflows/node-build.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    uses: ./.github/workflows/ci-node-build.yaml
     with:
       runs-on: ubuntu-latest
       working-directory: samples/managed-database/web
 
   managed-database-helm-lint:
     name: managed-database Helm lint
-    uses: kupecloud/github-workflows/.github/workflows/helm-lint.yaml@9e4df7e450d89d7f2efdd1997691cbd59ef26002 # v2.6.0
+    uses: ./.github/workflows/ci-helm-lint.yaml
     with:
       runs-on: ubuntu-latest
       chart-path: samples/managed-database/chart
