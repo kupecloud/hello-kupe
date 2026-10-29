@@ -17,7 +17,7 @@ image:
   repository: ghcr.io/kupecloud/hello-kupe
   pullPolicy: IfNotPresent
   # Use a signed image pinned by version and digest.
-  tag: "1.8.1@sha256:c316785bc47a770e9f708802774e67c3ede4a95558bda820134fa7b616544c7f"
+  tag: "1.8.2@sha256:624be5ccfe4174824c67d4199bb1f328b262380e32da77709145a4b0dccc5db5"
 
 service:
   port: 8080
