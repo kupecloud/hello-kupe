@@ -30,7 +30,7 @@ image:
   #
   # Empty falls back to Chart.appVersion, which is a bare tag: fine on a dev
   # estate (image verification runs in Audit there), denied on prod.
-  tag: "1.6.0@sha256:4eb7c3a86584d3f4817d0f5fc59f8211afa659ff5b9b28ac7c0fd68c34919e04"
+  tag: "1.7.0@sha256:74f3aed825be5fd49374bb1140967b63b745626ac57fb232b3fefea2171eb550"
 
 service:
   port: 8080
