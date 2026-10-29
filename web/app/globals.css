@@ -1245,6 +1245,63 @@ footer a {
     font-size: 9px;
   }
 }
+/* Cards follow the available panel width in both the full page and embeds. */
+.workspace > *,
+.sidebar > * {
+  min-width: 0;
+}
+.memory-card {
+  height: auto;
+  min-height: 64px;
+  aspect-ratio: 1.1;
+}
+.stats {
+  flex-wrap: wrap;
+}
+.icon-button {
+  width: 44px;
+  height: 44px;
+}
+.text-button {
+  min-height: 44px;
+}
+.feature-dialog {
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+}
+.embed-view {
+  max-width: none;
+  padding: clamp(12px, 2vw, 24px);
+}
+.embed-view .workspace {
+  grid-template-columns: minmax(0, 1fr) clamp(240px, 30%, 320px);
+  gap: clamp(12px, 2vw, 24px);
+}
+.embed-view .game-panel {
+  padding: clamp(12px, 2vw, 24px);
+}
+.embed-view .discovery-more {
+  margin-top: 12px;
+}
+@media (max-width: 760px) {
+  .embed-view .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .sidebar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .card-back,
+  .card-front {
+    gap: 5px;
+  }
+  .card-front > svg {
+    width: 24px;
+    height: 24px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .match-confetti {
     display: none;
