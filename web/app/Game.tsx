@@ -27,7 +27,10 @@ import {
   Activity,
   Clock3,
   MousePointer2,
+  Moon,
+  Sun,
 } from "lucide-react";
+import { useTheme } from "./useTheme";
 import {
   better,
   formatTime,
@@ -104,6 +107,7 @@ const MatchConfetti = memo(function MatchConfetti({ burst }: { burst: Burst }) {
 });
 
 export default function GameView({ embedded = false }: { embedded?: boolean }) {
+  const { theme, toggleTheme } = useTheme(embedded);
   const shell = useRef<HTMLDivElement>(null);
   const [features, setFeatures] = useState<Feature[]>([]);
   const [game, setGame] = useState<Game | null>(null);
@@ -443,6 +447,20 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
               >
                 Open console <ArrowUpRight size={15} />
               </a>
+              <button
+                type="button"
+                className="icon-button theme-toggle"
+                onClick={toggleTheme}
+                aria-label="Toggle dark mode"
+                aria-pressed={theme === "dark"}
+              >
+                <Moon
+                  className="theme-icon-light"
+                  size={20}
+                  aria-hidden="true"
+                />
+                <Sun className="theme-icon-dark" size={20} aria-hidden="true" />
+              </button>
             </nav>
           </header>
         )}

@@ -15,6 +15,7 @@ describe("game presentation", () => {
     expect(html).not.toContain("Open console");
     expect(html).not.toContain("<footer");
     expect(html).not.toContain("<dialog");
+    expect(html).not.toContain('aria-label="Toggle dark mode"');
   });
 
   it("keeps the full page branding and navigation in the normal view", () => {
@@ -25,5 +26,6 @@ describe("game presentation", () => {
     expect(html).toContain("Open console");
     expect(html).toContain("<footer");
     expect(html).toContain("<dialog");
+    expect(html).toContain('aria-label="Toggle dark mode"');
   });
 });
