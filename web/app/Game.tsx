@@ -110,6 +110,7 @@ const MatchConfetti = memo(function MatchConfetti({ burst }: { burst: Burst }) {
 export default function GameView({ embedded = false }: { embedded?: boolean }) {
   const { theme, toggleTheme } = useTheme(embedded);
   const shell = useRef<HTMLDivElement>(null);
+  const gamePanel = useRef<HTMLElement>(null);
   const [features, setFeatures] = useState<Feature[]>([]);
   const [game, setGame] = useState<Game | null>(null);
   const [board, setBoard] = useState<Board | null>(null);
@@ -130,6 +131,7 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
   const cardRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const revealedFaces = useRef(new Map<number, string>());
   const nameInput = useRef<HTMLInputElement>(null);
+  const completionReplay = useRef<HTMLButtonElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef(false);
   const clock = useRef({ base: 0, at: 0, running: false });
@@ -150,6 +152,21 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
     reportSize();
     return () => observer.disconnect();
   }, [embedded]);
+
+  useEffect(() => {
+    const panel = gamePanel.current;
+    const workspace = panel?.parentElement;
+    if (!panel || !workspace) return;
+    const measure = () =>
+      workspace.style.setProperty(
+        "--completion-board-height",
+        `${panel.offsetHeight}px`,
+      );
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    measure();
+    return () => observer.disconnect();
+  }, []);
 
   async function refreshBoard() {
     try {
@@ -250,6 +267,15 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
   }, [modal]);
 
   useEffect(() => {
+    if (!game?.complete) return;
+    const frame = requestAnimationFrame(() => {
+      const target = game.saved ? completionReplay.current : nameInput.current;
+      target?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [game?.complete, game?.saved]);
+
+  useEffect(() => {
     if (!burst) return;
     const timeout = setTimeout(() => setBurst(null), 2200);
     return () => clearTimeout(timeout);
@@ -334,8 +360,7 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
         celebrate(newlyMatched.map((card) => card.index));
         setLesson(newlyMatched[0].feature);
         requestAnimationFrame(() => {
-          if (next.complete) nameInput.current?.focus({ preventScroll: true });
-          else {
+          if (!next.complete) {
             const remaining = next.cards.filter((card) => !card.matched);
             const target =
               remaining.find((card) => card.index > index) || remaining[0];
@@ -491,8 +516,13 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
               </div>
             </section>
           )}
-          <div className="workspace">
-            <section className="game-panel" aria-labelledby="game-title">
+          <div className={`workspace${game?.complete ? " is-complete" : ""}`}>
+            <section
+              className="game-panel"
+              ref={gamePanel}
+              aria-labelledby="game-title"
+              inert={Boolean(game?.complete)}
+            >
               <div className="game-toolbar">
                 <div>
                   <h2 id="game-title">Find six pairs.</h2>
@@ -615,90 +645,26 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
                   );
                 })}
               </div>
-              {game &&
-                (game.complete ? (
-                  <div className="completion" aria-live="polite">
-                    <div className="completion-title">
-                      <span className="success-icon">
-                        <Trophy size={21} />
-                      </span>
-                      <div>
-                        <h3>Six pairs. A cloud of possibilities.</h3>
-                        <p>
-                          You did it in {game.moves} moves and{" "}
-                          {formatTime(game.elapsed_ms)}.
-                        </p>
-                      </div>
-                    </div>
-                    {game.saved ? (
-                      <div className="saved-row">
-                        <span>
-                          <Check size={17} /> Your score is on the board.
-                        </span>
-                        <button
-                          className="text-button"
-                          onClick={() => void start()}
-                          disabled={busy}
-                        >
-                          Play again <ArrowRight size={16} />
-                        </button>
-                      </div>
-                    ) : (
-                      <form onSubmit={save}>
-                        <label
-                          className="visually-hidden"
-                          htmlFor="player-name"
-                        >
-                          Your display name
-                        </label>
-                        <input
-                          id="player-name"
-                          ref={nameInput}
-                          value={name}
-                          onChange={(e) => setName(e.target.value)}
-                          maxLength={24}
-                          placeholder="Your name for the hall of fame"
-                          required
-                          disabled={busy}
-                          autoComplete="nickname"
-                        />
-                        <button
-                          className="primary-button"
-                          type="submit"
-                          disabled={busy || !name.trim()}
-                        >
-                          {busy ? "Saving…" : "Save my score"}
-                          <ArrowRight size={16} />
-                        </button>
-                        <small>
-                          Your name and result will be public.{" "}
-                          {board?.persistent
-                            ? "Saved to Kupe managed PostgreSQL."
-                            : "Practice scores are temporary."}
-                        </small>
-                      </form>
-                    )}
-                  </div>
-                ) : (
-                  <div className="playing-footer">
-                    <span className="live-dot" />
-                    <p>
-                      {game.reveal_ms > 0
-                        ? "Not quite a pair. Remember them for next time."
-                        : game.matches
-                          ? "Nice work. There’s more to discover."
-                          : game.moves > 0 || elapsed > 0
-                            ? "Keep those possibilities in mind."
-                            : "Your timer starts with your first flip."}
-                    </p>
-                    <span>
-                      {game.matches === 0
-                        ? "You’ve got this."
-                        : `${6 - game.matches} pairs to go`}
-                    </span>
-                  </div>
-                ))}
-              {error && (
+              {game && (
+                <div className="playing-footer" aria-hidden={game.complete}>
+                  <span className="live-dot" />
+                  <p>
+                    {game.reveal_ms > 0
+                      ? "Not quite a pair. Remember them for next time."
+                      : game.matches
+                        ? "Nice work. There’s more to discover."
+                        : game.moves > 0 || elapsed > 0
+                          ? "Keep those possibilities in mind."
+                          : "Your timer starts with your first flip."}
+                  </p>
+                  <span>
+                    {game.matches === 0
+                      ? "You’ve got this."
+                      : `${6 - game.matches} pairs to go`}
+                  </span>
+                </div>
+              )}
+              {error && !game?.complete && (
                 <div className="error-message" role="alert">
                   <Info size={17} />
                   <span>{error}</span>
@@ -712,7 +678,7 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
                 </div>
               )}
             </section>
-            <aside className="sidebar">
+            <aside className="sidebar" inert={Boolean(game?.complete)}>
               <section
                 className="leaderboard"
                 aria-labelledby="leaderboard-title"
@@ -858,6 +824,80 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
                 </div>
               </section>
             </aside>
+            {game?.complete && (
+              <div className="completion-overlay">
+                <section
+                  className="completion"
+                  role="region"
+                  aria-labelledby="completion-title"
+                  aria-live="polite"
+                >
+                  <div className="completion-title">
+                    <span className="success-icon" aria-hidden="true">
+                      <Trophy size={42} />
+                    </span>
+                    <div>
+                      <h3 id="completion-title">Six pairs. Well played!</h3>
+                      <p>
+                        {game.moves} moves · {formatTime(game.elapsed_ms)}
+                      </p>
+                    </div>
+                  </div>
+                  {game.saved ? (
+                    <div className="saved-row">
+                      <Check size={24} />
+                      <span>Your score is on the board.</span>
+                    </div>
+                  ) : (
+                    <form onSubmit={save}>
+                      <label htmlFor="player-name">Your display name</label>
+                      <div className="completion-fields">
+                        <input
+                          id="player-name"
+                          ref={nameInput}
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          maxLength={24}
+                          placeholder="e.g. Alex"
+                          required
+                          disabled={busy}
+                          autoComplete="nickname"
+                        />
+                        <button
+                          className="primary-button"
+                          type="submit"
+                          disabled={busy || !name.trim()}
+                        >
+                          {busy ? "Saving…" : "Save my score"}
+                          <ArrowRight size={22} />
+                        </button>
+                      </div>
+                      <small>
+                        Your name and result will be public.{" "}
+                        {board?.persistent
+                          ? "Saved to Kupe managed PostgreSQL."
+                          : "Practice scores are temporary."}
+                      </small>
+                    </form>
+                  )}
+                  {error && (
+                    <div className="error-message" role="alert">
+                      <Info size={22} />
+                      <span>{error}</span>
+                    </div>
+                  )}
+                  <button
+                    className="text-button completion-replay"
+                    ref={completionReplay}
+                    onClick={() => void start()}
+                    disabled={busy}
+                  >
+                    Play again
+                    <RotateCcw size={20} />
+                  </button>
+                </section>
+              </div>
+            )}
           </div>
         </main>
         {!embedded && (
