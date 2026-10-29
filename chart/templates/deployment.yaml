@@ -46,10 +46,7 @@ spec:
       {{- end }}
       automountServiceAccountToken: false
       securityContext:
-        # Required by the platform's `platform-require-seccomp` Kyverno
-        # policy. Set at the pod level so every container in the pod
-        # inherits it; container-level securityContext (below) keeps the
-        # container-only fields like capability drop and read-only rootfs.
+        # Apply the default seccomp profile to every container.
         seccompProfile:
           type: RuntimeDefault
       containers:

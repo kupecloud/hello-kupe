@@ -22,7 +22,7 @@ resources:
     cpu: 250m
     memory: 128Mi
 
-# Public image built and signed by GitHub Actions on core-hello-kupe-demo.
+# Signed image for the public game.
 image:
   repository: ghcr.io/kupecloud/hello-kupe
-  tag: demo-20261026-core-2b11b9b@sha256:ff53185621ab81d22fd40e6807d93056dbef00405c7d4e1920fe204ddad9d8cc
+  tag: "1.7.0@sha256:74f3aed825be5fd49374bb1140967b63b745626ac57fb232b3fefea2171eb550"

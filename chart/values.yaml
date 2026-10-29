@@ -16,20 +16,7 @@ domain: kupe.cloud
 image:
   repository: ghcr.io/kupecloud/hello-kupe
   pullPolicy: IfNotPresent
-  # Pinned to version AND digest ("X.Y.Z@sha256:..."). Written by the release
-  # itself, never by hand: main.yaml builds and signs the image BEFORE
-  # semantic-release, and .releaserc.json's prepareCmd stamps tag@digest into
-  # this line in the release commit. The template renders repository:tag, so
-  # the pod runs exactly the signed digest even if the tag is re-pushed later.
-  #
-  # The digest is NOT cosmetic. The platform's verify-platform-images policy
-  # denies any ghcr.io/kupecloud/* pod without one (a cosign signature is bound
-  # to a digest, so a bare tag cannot be verified). Overriding this with a plain
-  # tag — `--set image.tag=X.Y.Z` — makes the pod unschedulable on a Kupe
-  # cluster, and the only visible symptom is a pod stuck Pending.
-  #
-  # Empty falls back to Chart.appVersion, which is a bare tag: fine on a dev
-  # estate (image verification runs in Audit there), denied on prod.
+  # Use a signed image pinned by version and digest.
   tag: "1.7.0@sha256:74f3aed825be5fd49374bb1140967b63b745626ac57fb232b3fefea2171eb550"
 
 service:
@@ -58,9 +45,7 @@ resources:
 # matters under GitOps.
 #
 # CPU utilisation is measured against `resources.requests.cpu`, and needs a
-# metrics API in the cluster. On Kupe that is already there: each tenant
-# vCluster proxies the platform's metrics-server, so `kubectl top` and a
-# CPU-based HPA work with nothing extra to install.
+# metrics API in the cluster.
 #
 # The app's other endpoints cost tens of microseconds each, far too little to
 # move CPU utilisation. `GET /api/work?ms=N` burns N milliseconds of CPU per
