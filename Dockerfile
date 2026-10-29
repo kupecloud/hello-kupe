@@ -1,5 +1,5 @@
 # Build the Next.js frontend once; no Node process is needed at runtime.
-FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS web
 WORKDIR /web
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY web/package.json web/package-lock.json ./
@@ -10,7 +10,7 @@ RUN npm run build
 # Must be >= the `go` directive in go.mod — this image sets GOTOOLCHAIN=local,
 # so an older builder hard-fails with "go.mod requires go >= X". Bump in
 # lockstep with any go.mod bump.
-FROM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.23@sha256:a07f231c19b03e6106cf442f02a5bcf262147e744d15b7b5e4b6d81d420c70a0 AS builder
 
 WORKDIR /src
 
