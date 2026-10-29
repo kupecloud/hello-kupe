@@ -34,6 +34,7 @@ import { useTheme } from "./useTheme";
 import {
   better,
   formatTime,
+  presentFeature,
   request,
   type Board,
   type Feature,
@@ -383,7 +384,10 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
     }
   }
 
-  const currentFeature = features.find((f) => f.id === lesson);
+  const matchedFeature = features.find((f) => f.id === lesson);
+  const currentFeature = matchedFeature
+    ? presentFeature(matchedFeature, embedded)
+    : undefined;
   const cards =
     game?.cards ||
     Array.from({ length: 12 }, (_, index) => ({

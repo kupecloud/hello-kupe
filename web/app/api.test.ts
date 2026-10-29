@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { better, formatTime } from "./api";
+import { better, formatTime, presentFeature, type Feature } from "./api";
+
+describe("embedded feature descriptions", () => {
+  it.each(["observability", "gitops"])(
+    "uses capability language for %s without changing standalone content",
+    (id) => {
+      const feature: Feature = {
+        id,
+        title: "Capability",
+        description: "Learn more",
+        detail: "Vendor-specific implementation details",
+        link: "/docs",
+      };
+      expect(presentFeature(feature, false)).toBe(feature);
+      const embedded = presentFeature(feature, true);
+      expect(embedded.detail).not.toContain("Vendor-specific");
+      expect(embedded.id).toBe(id);
+      expect(embedded.link).toBe(feature.link);
+    },
+  );
+});
 
 describe("leaderboard display", () => {
   it("keeps minutes and seconds readable across minute boundaries", () => {

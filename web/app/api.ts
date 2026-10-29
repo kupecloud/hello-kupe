@@ -5,6 +5,19 @@ export type Feature = {
   detail: string;
   link: string;
 };
+
+export function presentFeature(feature: Feature, embedded: boolean): Feature {
+  if (!embedded) return feature;
+  const details: Record<string, string> = {
+    observability:
+      "Starting a game, flipping a card and saving a score all make real application requests. Use monitoring dashboards to explore logs, request counts and response times.",
+    gitops:
+      "Keep the game's image version and settings in Git. GitOps delivery keeps releases and cluster settings in sync, making updates repeatable. Saved scores can live beyond an app release when a database is connected.",
+  };
+  return details[feature.id]
+    ? { ...feature, detail: details[feature.id] }
+    : feature;
+}
 export type Card = { index: number; feature?: string; matched: boolean };
 export type Game = {
   id: string;
