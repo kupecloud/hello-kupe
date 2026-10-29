@@ -25,4 +25,4 @@ resources:
 # Signed image for the public game.
 image:
   repository: ghcr.io/kupecloud/hello-kupe
-  tag: "1.8.0@sha256:63e1b4e79c796854479118680270951fb618c6e66f8a78544f63c89c40690202"
+  tag: "1.8.1@sha256:c316785bc47a770e9f708802774e67c3ede4a95558bda820134fa7b616544c7f"
