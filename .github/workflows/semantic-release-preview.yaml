@@ -1,0 +1,71 @@
+name: Semantic Release Preview
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          GitHub-hosted runner label.
+        required: false
+        default: ubuntu-latest
+        type: string
+    outputs:
+      new_release_published:
+        description: Whether a new release would be published
+        value: ${{ jobs.preview.outputs.new_release_published }}
+      new_release_version:
+        description: Next release version
+        value: ${{ jobs.preview.outputs.new_release_version }}
+
+permissions:
+  contents: write
+
+jobs:
+  preview:
+    name: Semantic Release Preview
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      new_release_published: ${{ steps.preview.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Check repository release configuration
+        run: test -f .releaserc.json
+
+      - name: Semantic Release Preview
+        id: semantic
+        uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6.0.0
+        with:
+          dry_run: true
+          semantic_version: 25
+          extra_plugins: |
+            conventional-changelog-conventionalcommits@10.3.0
+            @semantic-release/exec
+            @semantic-release/git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine release preview result
+        id: preview
+        shell: bash
+        run: |
+          if [ -n "${{ steps.semantic.outputs.new_release_version }}" ]; then
+            echo "new_release_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_release_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Preview info
+        if: steps.preview.outputs.new_release_published == 'true'
+        run: |
+          echo "Next release would be: v${{ steps.semantic.outputs.new_release_version }}"

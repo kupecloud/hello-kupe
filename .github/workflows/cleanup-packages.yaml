@@ -1,0 +1,164 @@
+name: Cleanup GHCR Untagged
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          GitHub-hosted runner label.
+        required: false
+        default: ubuntu-latest
+        type: string
+      package_name:
+        description: GHCR package name under the owner (defaults to the repository name).
+        required: false
+        type: string
+        default: ""
+      retention_days:
+        description: Keep untagged versions updated within this many days.
+        required: false
+        type: number
+        default: 7
+      owner_type:
+        description: Package owner type — "orgs" or "users".
+        required: false
+        type: string
+        default: orgs
+      dry_run:
+        description: Log candidates without deleting anything.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    name: Delete untagged versions older than retention window
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Prune untagged GHCR versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          OWNER_TYPE: ${{ inputs.owner_type }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          PACKAGE_INPUT: ${{ inputs.package_name }}
+          RETENTION_DAYS: ${{ inputs.retention_days }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          package="${PACKAGE_INPUT:-$REPO_NAME}"
+          package_enc=${package//\//%2F}
+
+          cutoff_epoch=$(date -u -d "${RETENTION_DAYS} days ago" +%s)
+          echo "Owner:          ${OWNER_TYPE}/${OWNER}"
+          echo "Package:        ${package}"
+          echo "Retention days: ${RETENTION_DAYS}"
+          echo "Cutoff (UTC):   $(date -u -d "@${cutoff_epoch}" -Iseconds)"
+          echo "Dry run:        ${DRY_RUN}"
+          echo
+
+          kept_tagged=0
+          kept_recent=0
+          kept_referenced=0
+          deleted=0
+          would_delete=0
+
+          reg_bearer=$(printf '%s' "${GH_TOKEN}" | base64 | tr -d '\n')
+          registry_path=$(printf '%s/%s' "${OWNER}" "${package}" | tr '[:upper:]' '[:lower:]')
+          declare -A referenced=()
+
+          page=1
+          while :; do
+            response=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/${OWNER_TYPE}/${OWNER}/packages/container/${package_enc}/versions?per_page=100&page=${page}")
+            [ "$(echo "$response" | jq 'length')" -eq 0 ] && break
+
+            while IFS=$'\t' read -r digest tag_count; do
+              [ "$tag_count" -gt 0 ] || continue
+              children=$(curl -fsSL \
+                -H "Authorization: Bearer ${reg_bearer}" \
+                -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+                "https://ghcr.io/v2/${registry_path}/manifests/${digest}" 2>/dev/null \
+                | jq -r 'if .manifests then .manifests[].digest else empty end' 2>/dev/null || true)
+              for child in $children; do
+                referenced["$child"]=1
+              done
+            done < <(echo "$response" | jq -r '.[] | [.name, (.metadata.container.tags | length)] | @tsv')
+
+            page=$((page + 1))
+          done
+          echo "Referenced child manifests (multi-arch + attestations, always kept): ${#referenced[@]}"
+          echo
+
+          page=1
+          while :; do
+            response=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/${OWNER_TYPE}/${OWNER}/packages/container/${package_enc}/versions?per_page=100&page=${page}")
+
+            count=$(echo "$response" | jq 'length')
+            if [ "$count" -eq 0 ]; then
+              break
+            fi
+
+            while IFS=$'\t' read -r id digest updated_at tag_count; do
+              if [ "$tag_count" -gt 0 ]; then
+                kept_tagged=$((kept_tagged + 1))
+                continue
+              fi
+
+              if [ -n "${referenced[$digest]:-}" ]; then
+                kept_referenced=$((kept_referenced + 1))
+                continue
+              fi
+
+              updated_epoch=$(date -u -d "$updated_at" +%s)
+              if [ "$updated_epoch" -gt "$cutoff_epoch" ]; then
+                kept_recent=$((kept_recent + 1))
+                continue
+              fi
+
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "DRY RUN: would delete version ${id} (${digest}, updated ${updated_at})"
+                would_delete=$((would_delete + 1))
+              else
+                echo "Deleting version ${id} (${digest}, updated ${updated_at})"
+                gh api --method DELETE \
+                  "/${OWNER_TYPE}/${OWNER}/packages/container/${package_enc}/versions/${id}"
+                deleted=$((deleted + 1))
+              fi
+            done < <(echo "$response" | jq -r '.[] | [.id, .name, .updated_at, (.metadata.container.tags | length)] | @tsv')
+
+            page=$((page + 1))
+          done
+
+          echo
+          echo "Summary:"
+          echo "  kept (tagged):     ${kept_tagged}"
+          echo "  kept (referenced): ${kept_referenced}"
+          echo "  kept (recent):     ${kept_recent}"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "  would delete:   ${would_delete}"
+          else
+            echo "  deleted:        ${deleted}"
+          fi
+
+          {
+            echo "### GHCR cleanup: ${package}"
+            echo ""
+            echo "| metric | count |"
+            echo "| --- | ---: |"
+            echo "| kept (tagged) | ${kept_tagged} |"
+            echo "| kept (referenced by tagged index) | ${kept_referenced} |"
+            echo "| kept (recent, < ${RETENTION_DAYS}d) | ${kept_recent} |"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "| would delete | ${would_delete} |"
+            else
+              echo "| deleted | ${deleted} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

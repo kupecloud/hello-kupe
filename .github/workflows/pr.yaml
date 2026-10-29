@@ -45,7 +45,7 @@ jobs:
 
   rbac-audit:
     name: RBAC Secrets Audit
-    uses: kupecloud/github-workflows/.github/workflows/helm-rbac-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
+    uses: ./.github/workflows/helm-rbac-audit.yaml
     with:
       runs-on: ubuntu-latest
       chart-path: chart
@@ -54,7 +54,7 @@ jobs:
 
   automount-audit:
     name: Pod Automount Audit
-    uses: kupecloud/github-workflows/.github/workflows/helm-automount-audit.yaml@98b8368020991c33bf4041bee6081d865ff4850a # v2.4.0
+    uses: ./.github/workflows/helm-automount-audit.yaml
     with:
       runs-on: ubuntu-latest
       chart-path: chart

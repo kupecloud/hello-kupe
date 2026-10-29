@@ -3,8 +3,15 @@ name: Action Lint
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
-  action-lint:
-    uses: kupecloud/github-workflows/.github/workflows/action-lint.yaml@75f2bc349709d9fec6630dbd937301d1a32708e0 # v1.1.0
-    with:
-      runs-on: ubuntu-latest
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
