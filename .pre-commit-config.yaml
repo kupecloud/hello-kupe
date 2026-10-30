@@ -48,15 +48,13 @@ repos:
   - repo: https://github.com/golangci/golangci-lint
     rev: 8f3b0c7ed018e57905fbd873c697e0b1ede605a5
     hooks:
+      # Commit-time only: lints what changed since HEAD. CI runs the full
+      # manual-stage golangci-lint hooks below instead.
       - id: golangci-lint
         args:
           - --timeout=10m
-      # The sample is a Go module of its own, which a run from the root skips.
-      - id: golangci-lint
-        alias: golangci-lint-sample
-        name: golangci-lint (managed-database sample)
-        entry: bash -c 'cd samples/managed-database && golangci-lint run --timeout=10m ./...'
-        files: ^samples/managed-database/
+        stages:
+          - pre-commit
 
   - repo: local
     hooks:
@@ -72,21 +70,17 @@ repos:
         language: system
         types:
           - go
+      # govulncheck runs on commit and weekly in security.yaml; CI's gates job
+      # skips it (it ran only on main before, never on PRs).
       - id: govulncheck
         name: govulncheck
         entry: bash -c 'GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...'
         language: system
         pass_filenames: false
         files: ^(cmd/|internal/|go\.mod|Dockerfile|Makefile)
-      - id: gosec
-        name: gosec
-        entry: bash -c 'GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...'
-        language: system
-        pass_filenames: false
-        files: ^(cmd/|internal/|go\.mod|Dockerfile|Makefile)
       - id: helm-lint
-        name: helm lint
-        entry: bash -c 'helm lint chart --set tenant=example-tenant --set cluster=example'
+        name: helm lint (default and database values)
+        entry: make helm-lint
         language: system
         pass_filenames: false
         files: ^chart/
@@ -96,18 +90,130 @@ repos:
         language: system
         pass_filenames: false
         files: ^samples/managed-database/(cmd/|internal/|go\.(mod|sum)$|Dockerfile)
-      - id: gosec-sample
-        name: gosec (managed-database sample)
-        entry: bash -c 'cd samples/managed-database && GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...'
-        language: system
-        pass_filenames: false
-        files: ^samples/managed-database/(cmd/|internal/|go\.(mod|sum)$|Dockerfile)
       - id: helm-lint-sample
         name: helm lint (managed-database sample)
         entry: bash -c 'cd samples/managed-database && make helm-lint'
         language: system
         pass_filenames: false
         files: ^samples/managed-database/chart/
+      - id: tofu-fmt
+        name: tofu fmt (infra)
+        entry: tofu fmt -check infra
+        language: system
+        pass_filenames: false
+        files: ^infra/
+      - id: cloud-script-tests
+        name: cloud script tests
+        entry: node --test scripts/cloud.test.mjs
+        language: system
+        pass_filenames: false
+        files: ^scripts/
+      - id: registry-sample-render
+        name: registry sample chart render
+        entry: .github/hooks/registry-sample-render.sh
+        language: system
+        pass_filenames: false
+        files: ^chart/
+      - id: helm-rbac-audit
+        name: helm RBAC secrets audit
+        entry: .github/hooks/helm-rbac-audit.sh chart hello-kupe --set tenant=example-tenant --set cluster=example
+        language: system
+        pass_filenames: false
+        files: ^chart/
+      - id: helm-automount-audit
+        name: helm pod token automount audit (report only)
+        entry: .github/hooks/helm-automount-audit.sh chart hello-kupe --set tenant=example-tenant --set cluster=example
+        language: system
+        pass_filenames: false
+        verbose: true
+        files: ^chart/
+      - id: registry-terraform-fmt
+        name: terraform fmt (registry sample)
+        entry: terraform fmt -check -recursive samples/registry/terraform
+        language: system
+        pass_filenames: false
+        files: ^samples/registry/terraform/
+
+      # Slow checks: manual stage, so a commit stays fast. CI runs them with
+      # `pre-commit run --all-files --hook-stage manual`
+      # (kupecloud/github-workflows#14).
+      - id: go-mod-tidy
+        name: go mod tidy -diff
+        entry: go mod tidy -diff
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: golangci-lint-full
+        name: golangci-lint (all files)
+        entry: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 run --timeout=10m ./...
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: go-test
+        name: go test -race (with PostgreSQL when configured)
+        entry: .github/hooks/go-test.sh
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: gosec
+        name: gosec
+        entry: bash -c 'GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...'
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: tofu-validate
+        name: tofu validate (infra)
+        entry: bash -c 'tofu -chdir=infra init -backend=false -input=false && tofu -chdir=infra validate'
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: web-checks
+        name: web build, typecheck and test
+        entry: bash -c 'cd web && npm run build && npm run typecheck && npm test'
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: sample-go-checks
+        name: go mod tidy, vet and test -race (managed-database sample)
+        entry: bash -c 'cd samples/managed-database && export GOWORK=off && go mod tidy -diff && go vet ./... && go test -race -timeout 120s ./...'
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: golangci-lint-sample
+        name: golangci-lint (managed-database sample)
+        entry: bash -c 'cd samples/managed-database && GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 run --timeout=10m --config ../../.golangci.yaml ./...'
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: gosec-sample
+        name: gosec (managed-database sample)
+        entry: bash -c 'cd samples/managed-database && GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.25.0 -exclude-generated ./...'
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
+      - id: sample-web-checks
+        name: web test and build (managed-database sample)
+        entry: bash -c 'cd samples/managed-database/web && npm test && npm run build'
+        language: system
+        pass_filenames: false
+        stages:
+          - manual
 
   # Refuse any commit whose STAGED content contains a secret. Added org-wide on
   # 2026-10-06 after three OpenTofu state files carrying a dev SSH private key

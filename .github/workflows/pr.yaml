@@ -4,71 +4,77 @@ on:
   pull_request:
     branches:
       - main
+    # Every path a hook or job reads. The whole-repo hooks (codespell,
+    # gitleaks, whitespace, check-yaml/json) read every tracked file, so this
+    # list covers the tree; keep it in step when a new top-level path appears.
     paths:
       - "go.mod"
       - "go.sum"
       - "**.go"
+      - "**.md"
       - "Dockerfile"
+      - ".dockerignore"
+      - ".gitignore"
+      - ".golangci.yaml"
+      - ".markdownlint-cli2.yaml"
+      - ".pre-commit-config.yaml"
+      - ".releaserc.json"
+      - "renovate.json"
       - "chart/**"
-      - ".github/workflows/**"
+      - ".github/**"
       - "Makefile"
       - "samples/**"
       - "web/**"
       - "infra/**"
       - "scripts/**"
+      - "docs/**"
+      - "local/**"
       - "compose.yaml"
-      - ".dockerignore"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  infra:
-    name: Infrastructure
-    uses: ./.github/workflows/infra.yaml
-
-  game:
-    name: Game
-    uses: ./.github/workflows/game.yaml
-
-  go-lint:
-    name: Go Lint
-    uses: ./.github/workflows/go-lint.yaml
-
-  action-lint:
-    name: Action Lint
-    uses: ./.github/workflows/action-lint.yaml
-
-  helm-lint:
-    name: Helm Lint
-    uses: ./.github/workflows/helm-lint.yaml
-
-  rbac-audit:
-    name: RBAC Secrets Audit
-    uses: ./.github/workflows/helm-rbac-audit.yaml
+  # Every check the old PR jobs ran is a pre-commit hook now; the slow ones
+  # are manual-stage hooks (kupecloud/github-workflows#14).
+  gates:
+    name: Gates
+    uses: ./.github/workflows/gates.yaml
     with:
-      runs-on: ubuntu-latest
-      chart-path: chart
-      template-args: --set tenant=example-tenant --set cluster=example
-      release-name: hello-kupe
+      pre-commit-args: --all-files --show-diff-on-failure --hook-stage manual
+      # govulncheck (root module) never ran on PRs; it runs weekly in
+      # security.yaml. The sample's govulncheck still runs here, as before.
+      skip: govulncheck
 
-  automount-audit:
-    name: Pod Automount Audit
-    uses: ./.github/workflows/helm-automount-audit.yaml
-    with:
-      runs-on: ubuntu-latest
-      chart-path: chart
-      template-args: --set tenant=example-tenant --set cluster=example
-      release-name: hello-kupe
-
-  unit-tests:
-    name: Unit Tests
-    needs:
-      - go-lint
-      - action-lint
-      - helm-lint
-    uses: ./.github/workflows/unit-tests.yaml
-
-  samples:
-    name: Samples
-    uses: ./.github/workflows/samples.yaml
+  # Docker builds do not map to a hook. They run beside the gates job, not
+  # after it, so the PR gets both answers at once.
+  # KUPE_CI_HEAVY: org variables are readable here, but none is set, so
+  # `!= 'off'` is true and this job runs.
+  images:
+    name: Image ${{ matrix.name }}
+    if: vars.KUPE_CI_HEAVY != 'off'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: hello-kupe
+            context: .
+            dockerfile: Dockerfile
+          - name: managed-database api
+            context: samples/managed-database
+            dockerfile: Dockerfile.api
+          - name: managed-database web
+            context: samples/managed-database
+            dockerfile: Dockerfile.web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build image
+        working-directory: ${{ matrix.context }}
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: docker build -f "$DOCKERFILE" .
