@@ -452,9 +452,8 @@ as the database and its bindings. If you pointed the bindings at a cluster you
 already had, delete the `todo-web`, `todo-api` and `todo-migrate` namespaces afterwards,
 and `todo-reports` if you set `enable_reports`.
 
-Deleting a database removes it immediately. Its storage is kept for 7 days for
-support-assisted recovery, then permanently deleted. There is no self-service
-restore in v1.
+Deleting a database removes it and its automatic backups immediately, and they
+cannot be restored. Manual backups stay until you delete them.
 
 ## Local development
 
