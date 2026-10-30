@@ -14,70 +14,21 @@ permissions:
   contents: read
 
 jobs:
-  infra:
-    name: Infrastructure
-    uses: ./.github/workflows/infra.yaml
-
-  game:
-    name: Game
-    uses: ./.github/workflows/game.yaml
-
-  go-lint:
-    name: Go Lint
-    uses: ./.github/workflows/go-lint.yaml
-
-  action-lint:
-    name: Action Lint
-    uses: ./.github/workflows/action-lint.yaml
-
-  helm-lint:
-    name: Helm Lint
-    uses: ./.github/workflows/helm-lint.yaml
-
-  rbac-audit:
-    name: RBAC Secrets Audit
-    uses: ./.github/workflows/helm-rbac-audit.yaml
+  # The same gates the PR ran. There is no branch protection, so this is what
+  # guarantees a released tree passed them (kupecloud/github-workflows#14).
+  gates:
+    name: Gates
+    uses: ./.github/workflows/gates.yaml
     with:
-      runs-on: ubuntu-latest
-      chart-path: chart
-      template-args: --set tenant=example-tenant --set cluster=example
-      release-name: hello-kupe
-
-  automount-audit:
-    name: Pod Automount Audit
-    uses: ./.github/workflows/helm-automount-audit.yaml
-    with:
-      runs-on: ubuntu-latest
-      chart-path: chart
-      template-args: --set tenant=example-tenant --set cluster=example
-      release-name: hello-kupe
-
-  unit-tests:
-    name: Unit Tests
-    needs:
-      - go-lint
-      - action-lint
-      - helm-lint
-    uses: ./.github/workflows/unit-tests.yaml
-
-  gosec:
-    name: Go Security
-    needs:
-      - unit-tests
-    uses: ./.github/workflows/gosec.yaml
-
-  samples:
-    name: Samples
-    uses: ./.github/workflows/samples.yaml
+      pre-commit-args: --all-files --show-diff-on-failure --hook-stage manual
+      # govulncheck runs weekly in security.yaml, so a new advisory does not
+      # block an unrelated release.
+      skip: govulncheck
 
   version:
     name: Version
     needs:
-      - gosec
-      - game
-      - infra
-      - rbac-audit
-      - automount-audit
+      - gates
     uses: ./.github/workflows/semantic-release-preview.yaml
     with:
       runs-on: ubuntu-latest

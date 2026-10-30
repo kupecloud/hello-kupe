@@ -1,0 +1,25 @@
+name: Security
+
+# govulncheck on the root module, weekly and on demand
+# (kupecloud/github-workflows#14). It ran on every push to main before; it is
+# a security check, so it is not behind KUPE_CI_HEAVY. gosec runs on every PR
+# in the gates job, and the managed-database sample's govulncheck still runs
+# on every PR.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: Go Vulnerability Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

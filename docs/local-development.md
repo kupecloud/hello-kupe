@@ -109,3 +109,15 @@ rollback and that the runtime role cannot create tables or touch migration
 history. Unit tests cover hidden cards, matching, advancing past mismatches,
 timing, malformed requests, score submission and cross-origin writes. CI also builds the frontend
 and container and validates the chart with and without a database.
+
+CI runs every check as a pre-commit hook, so you can run the same set locally. The slow hooks
+are in the manual stage:
+
+```bash
+MIGRATE_DATABASE_URL='postgres://app_owner:local-owner@127.0.0.1:15432/hello_kupe?sslmode=disable' \
+TEST_DATABASE_URL='postgres://app_readwrite:local-readwrite@127.0.0.1:15432/hello_kupe?sslmode=disable' \
+  pre-commit run --all-files --hook-stage manual
+```
+
+Without the two URLs the `go-test` hook skips the migrations and the PostgreSQL tests. It needs
+Go, Node, Helm, yq, OpenTofu and Terraform on your `PATH`.
