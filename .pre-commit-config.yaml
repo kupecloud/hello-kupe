@@ -114,12 +114,36 @@ repos:
         language: system
         pass_filenames: false
         files: ^chart/
+      # RBAC Secrets Audit: no rendered ClusterRole may read secrets cluster-wide
+      # unless an --allow entry names it with a reason (kupecloud/kupe-tests#123).
+      # Vendored byte-identical from github-workflows
+      # scripts/hooks/helm-rbac-audit.sh; never edit it here. The chart needs
+      # tenant and cluster set to render.
       - id: helm-rbac-audit
-        name: helm RBAC secrets audit
-        entry: .github/hooks/helm-rbac-audit.sh chart hello-kupe --set tenant=example-tenant --set cluster=example
+        name: helm rbac secrets audit (prod values)
+        entry: >-
+          bash .github/hooks/helm-rbac-audit.sh hello-kupe chart
+          -f chart/values/mgmt/prod.yaml
+          --set tenant=example-tenant --set cluster=example
         language: system
         pass_filenames: false
-        files: ^chart/
+        files: ^(chart/|\.github/hooks/helm-rbac-audit\.sh)
+        stages: [manual]
+      # Resource Limits Audit: every Deployment, StatefulSet, DaemonSet, Job and
+      # CronJob container sets CPU and memory requests and limits, in every
+      # render (kupecloud/kupe-tests#123). Vendored byte-identical from
+      # github-workflows scripts/hooks/helm-limits-audit.sh; never edit it here.
+      - id: helm-limits-audit
+        name: helm limits audit (default and prod values)
+        entry: >-
+          bash .github/hooks/helm-limits-audit.sh hello-kupe chart
+          --values chart/values.yaml
+          --values chart/values/mgmt/prod.yaml
+          -- --set tenant=example-tenant --set cluster=example
+        language: system
+        pass_filenames: false
+        files: ^(chart/|\.github/hooks/helm-limits-audit\.sh)
+        stages: [manual]
       - id: helm-automount-audit
         name: helm pod token automount audit (report only)
         entry: .github/hooks/helm-automount-audit.sh chart hello-kupe --set tenant=example-tenant --set cluster=example
