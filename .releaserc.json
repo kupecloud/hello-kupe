@@ -18,7 +18,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "test -n \"$IMAGE_DIGEST\" && test \"$IMAGE_VERSION\" = \"${nextRelease.version}\" && sed -i -E 's|^version: .*|version: ${nextRelease.version}|' chart/Chart.yaml && sed -i -E 's|^appVersion: .*|appVersion: \"${nextRelease.version}\"|' chart/Chart.yaml && sed -i -E '/^image:/,/^[a-zA-Z]/ s|^([[:space:]]+)tag: .*|\\1tag: \"${nextRelease.version}@'\"$IMAGE_DIGEST\"'\"|' chart/values.yaml"
+        "prepareCmd": "test -n \"$IMAGE_DIGEST\" && test \"$IMAGE_VERSION\" = \"${nextRelease.version}\" && sed -i -E 's|^version: .*|version: ${nextRelease.version}|' chart/Chart.yaml && sed -i -E 's|^appVersion: .*|appVersion: \"${nextRelease.version}\"|' chart/Chart.yaml && sed -i -E '/^image:/,/^[a-zA-Z]/ s|^([[:space:]]+)tag: .*|\\1tag: \"${nextRelease.version}@'\"$IMAGE_DIGEST\"'\"|' chart/values.yaml chart/values/mgmt/prod.yaml"
       }
     ],
     [
@@ -26,7 +26,7 @@
       {
         "assets": [
           "chart/Chart.yaml",
-          "chart/values.yaml"
+          "chart/values.yaml", "chart/values/mgmt/prod.yaml"
         ],
         "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
