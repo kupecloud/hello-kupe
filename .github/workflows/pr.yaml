@@ -52,11 +52,11 @@ jobs:
 
   # Docker builds do not map to a hook. They run beside the gates job, not
   # after it, so the PR gets both answers at once.
-  # KUPE_CI_HEAVY: heavy jobs are opt-in, so this job runs only while the
-  # variable is 'on' (kupecloud/github-workflows#20).
+  # Not behind KUPE_CI_HEAVY: this public repository builds on GitHub-hosted
+  # runners at no cost to kupe runner capacity, and this is the only CI build
+  # of the sample Dockerfiles (kupecloud/github-workflows#20).
   images:
     name: Image ${{ matrix.name }}
-    if: vars.KUPE_CI_HEAVY == 'on'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
