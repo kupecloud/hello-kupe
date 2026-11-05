@@ -25,7 +25,7 @@ resources:
 # Signed image for the public game.
 image:
   repository: ghcr.io/kupecloud/hello-kupe
-  tag: "1.8.4@sha256:d266852ca8ad0a5562c9e13d5f6f5e2fcd66b38f410e5cf5a3d7568b678ab2de"
+  tag: "1.9.0@sha256:6db33a42b978b5a7691c301350e6ab3c9b5817027998af35eb5dbb77d56fe53b"
 
 # Release verification reads this namespace's vulnerability reports.
 vulnerabilityReportReader:
