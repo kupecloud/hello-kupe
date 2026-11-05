@@ -1,7 +1,7 @@
 name: Trivy Image Scan
 
 # The public-repo copy of github-workflows' trivy-image-scan.yaml (at
-# kupecloud/github-workflows#23, 1fdb1f0c2e548d9a5c931809634cb88eb5372789):
+# kupecloud/github-workflows v2.14.0, 3e77e1a3a6e400f0495adfb3fef51f57ffd769f6):
 # github-workflows is private, so a public repo cannot call it, as gates.yaml
 # copies pre-commit-gates.yaml. Keep it in step with the shared file; change
 # nothing below this paragraph except to match it.
@@ -17,14 +17,25 @@ name: Trivy Image Scan
 # depth is taken: containers and initContainers of every workload kind, pod
 # templates embedded in other resources, CloudNativePG's imageName and compose
 # services alike. Values that are not image references (a Kyverno pattern such
-# as "!*:latest") are listed and skipped. The list is deduplicated and each
-# image is scanned for linux/amd64 (every prod node).
+# as "!*:latest") are listed and skipped; in a manifests file, a value using
+# variable interpolation (${TAG}) fails the job, since it names an image the
+# scan cannot resolve. The list is deduplicated and each image is scanned for
+# linux/amd64 (every prod node).
 #
 # Policy: the job FAILS on any HIGH or CRITICAL vulnerability that has a fix
-# available (trivy --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1).
+# available (Trivy Status "fixed", what --ignore-unfixed keeps), from one
+# scan per image with --severity HIGH,CRITICAL.
 # HIGH and CRITICAL findings with no fix are reported, not failed. A third-party
 # image fails too when upstream has a fixed release: the fix is bumping the pin.
-# There is no waiver input.
+#
+# The only exception is a reviewed baseline (baseline-file, default
+# security/image-baselines.yaml): for a third-party image whose findings have a
+# package fix but no upstream image release that ships it. An entry covers one
+# repository at one digest, on the platforms it lists, and only the exact
+# findings it lists (ID, package, installed version and target). A CRITICAL is
+# never baselined. An entry expires at most 90 days after its review; an
+# expired, malformed or duplicate entry fails the job. Baselined findings stay
+# in results.json and the summary, marked as such. There is no other waiver.
 
 on:
   workflow_call:
@@ -82,6 +93,14 @@ on:
           are skipped.
         required: false
         default: ""
+        type: string
+      baseline-file:
+        description: >-
+          Reviewed baseline file (see the header comment and README). A missing
+          file means no finding is baselined; a malformed or expired one fails
+          the job.
+        required: false
+        default: security/image-baselines.yaml
         type: string
       platform:
         description: Image platform to scan (the prod node platform)
@@ -281,20 +300,26 @@ jobs:
             | $k + "/" + $n + " " + ([$p, .key] | map(select(. != "")) | join(".")) + "\t" + .value'
           # A docker reference: lowercase name components with an optional
           # registry host[:port], then an optional tag and an optional digest.
-          # A value holding a glob, negation or template character is a policy
-          # pattern or placeholder, not an image: listed and skipped. Anything
-          # else that is not a valid reference (a truncated digest, say) fails.
+          # In a manifests file, a value using shell/compose variable
+          # interpolation (${VAR}, ${VAR:-x}, $VAR) names an image the scan
+          # cannot resolve, so it fails the job. Otherwise a value holding a
+          # glob, negation or template character is a policy pattern (a Kyverno
+          # "!*:latest"), not an image: listed and skipped. Anything else that
+          # is not a valid reference (a truncated digest, say) fails.
+          interp_re='[$]([{]|[A-Za-z_])'
           pattern_re='[][*!?{}$<>|[:space:]]'
           ref_re='^[a-z0-9]+([._-]+[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-]+[a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[a-f0-9]{64})?$'
 
           : > "$out/refs.tsv"
           : > "$out/skipped.tsv"
 
-          # extract <label> <file> <require-image>: add every image in <file>.
-          # With require-image=1 a file with no image fails the job (a chart
-          # render with nothing to scan means a wrong chart path or values).
+          # extract <label> <file> <require-image> <no-interpolation>: add
+          # every image in <file>. With require-image=1 a file with no image
+          # fails the job (a chart render with nothing to scan means a wrong
+          # chart path or values). With no-interpolation=1 a value using
+          # variable interpolation fails the job instead of being skipped.
           extract() {
-            local label="$1" file="$2" require="$3" found=0 target image
+            local label="$1" file="$2" require="$3" no_interp="$4" found=0 target image
             # To a file first: a yq error inside <(...) would not stop the job.
             yq -N "$expr" "$file" > "$out/extract.tsv"
             while IFS="$tab" read -r target image; do
@@ -305,6 +330,9 @@ jobs:
               elif [[ "$image" =~ $ref_re ]]; then
                 printf '%s\t%s\t%s\n' "$image" "$target" "$label" >> "$out/refs.tsv"
                 found=1
+              elif [ "$no_interp" = 1 ] && [[ "$image" =~ $interp_re ]]; then
+                echo "::error::$target is '$image', which uses variable interpolation, so the image cannot be scanned ($label). Write the literal reference."
+                bad=1
               elif [[ "$image" =~ $pattern_re ]]; then
                 printf '%s\t%s\t%s\n' "$image" "$target" "$label" >> "$out/skipped.tsv"
               else
@@ -321,7 +349,7 @@ jobs:
           sources=0
           i=1
           while [ -f "$out/$i.yaml" ]; do
-            extract "render: $(cat "$out/$i.label")" "$out/$i.yaml" 1
+            extract "render: $(cat "$out/$i.label")" "$out/$i.yaml" 1 0
             sources=$((sources + 1))
             i=$((i + 1))
           done
@@ -341,7 +369,7 @@ jobs:
               continue
             fi
             for f in "${matches[@]}"; do
-              extract "$f" "$f" 0
+              extract "$f" "$f" 0 1
               sources=$((sources + 1))
             done
           done <<< "$MANIFESTS"
@@ -384,6 +412,89 @@ jobs:
           if [ "$bad" -ne 0 ]; then
             exit 1
           fi
+
+      - name: Load baselines
+        # The repository's reviewed baseline file, validated and written as
+        # baselines.json for the gate. No file means nothing is baselined.
+        # Anything malformed, unknown, duplicated or expired fails the job, so
+        # an entry never quietly widens or silently outlives its review.
+        shell: bash
+        env:
+          BASELINE_FILE: ${{ inputs.baseline-file }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trivy-image-scan"
+          mkdir -p "$out"
+          if [ -z "$BASELINE_FILE" ] || [ ! -e "$BASELINE_FILE" ]; then
+            echo "No baseline file${BASELINE_FILE:+ at $BASELINE_FILE}; no finding is baselined."
+            echo '[]' > "$out/baselines.json"
+            exit 0
+          fi
+          # To a file first: a yq parse error must fail the job.
+          yq -o=json '.' "$BASELINE_FILE" > "$out/baselines.raw.json"
+          # One line per problem; no output means the file is valid.
+          # shellcheck disable=SC2016
+          check='
+            def str: type == "string" and length > 0;
+            def date_ok: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+              and ((try (strptime("%Y-%m-%d") | mktime) catch null) != null);
+            def days: strptime("%Y-%m-%d") | mktime / 86400;
+            ["image", "digest", "platforms", "findings", "reviewedBy", "reviewedOn", "expires", "reason"] as $req
+            | ($req + ["signerIdentity", "signerWorkflowSha"]) as $allowed
+            | ["id", "installedVersion", "package", "target"] as $fkeys
+            | if type != "array" or length == 0 then "the file must be a non-empty YAML list of entries"
+              else
+                (to_entries[] | .key as $i | .value as $e
+                 | ("entry \($i)" + (if ($e | type) == "object" and ($e.image | str) then " (\($e.image))" else "" end)) as $at
+                 | if ($e | type) != "object" then "\($at): must be a mapping"
+                   else
+                     (($req - ($e | keys))[] | "\($at): missing \(.)"),
+                     ((($e | keys) - $allowed)[] | "\($at): unknown key \(.)"),
+                     (select(($e.image | str | not) or ($e.image | test("@|:[^/]*$")))
+                       | "\($at): image must be a repository with no tag or digest"),
+                     (select(($e.digest | type) != "string" or ($e.digest | test("^sha256:[a-f0-9]{64}$") | not))
+                       | "\($at): digest must be sha256:<64 lowercase hex>"),
+                     (select(($e.platforms | type) != "array" or ($e.platforms | length) == 0
+                         or ($e.platforms | all(type == "string" and test("^[a-z0-9]+/[a-z0-9]+(/[a-z0-9]+)?$")) | not))
+                       | "\($at): platforms must be a non-empty list such as linux/amd64"),
+                     (select(($e.findings | type) != "array" or ($e.findings | length) == 0)
+                       | "\($at): findings must be a non-empty list"),
+                     (if ($e.findings | type) == "array" then
+                        ($e.findings | to_entries[] | .key as $j | .value as $f
+                         | if ($f | type) != "object" then "\($at) finding \($j): must be a mapping"
+                           elif ($f | keys) != $fkeys then "\($at) finding \($j): must have exactly id, package, installedVersion and target"
+                           elif ([$f[] | str] | all | not) then "\($at) finding \($j): every field must be a non-empty string"
+                           else empty end)
+                      else empty end),
+                     (["reviewedBy", "reason"][] as $k | select($e[$k] | str | not)
+                       | "\($at): \($k) must be a non-empty string"),
+                     (["signerIdentity", "signerWorkflowSha"][] as $k | select($e | has($k)) | select($e[$k] | str | not)
+                       | "\($at): \($k) must be a non-empty string when set"),
+                     (["reviewedOn", "expires"][] as $k | select($e[$k] | date_ok | not)
+                       | "\($at): \($k) must be a YYYY-MM-DD date"),
+                     (select(($e.reviewedOn | date_ok) and ($e.expires | date_ok))
+                       | (select($e.reviewedOn > $today) | "\($at): reviewedOn \($e.reviewedOn) is in the future"),
+                         (select($e.expires < $e.reviewedOn) | "\($at): expires before reviewedOn"),
+                         (select(($e.expires | days) - ($e.reviewedOn | days) > 90)
+                           | "\($at): expires more than 90 days after reviewedOn"),
+                         (select($e.expires < $today)
+                           | "\($at): expired on \($e.expires); re-review it against a fresh scan"))
+                   end),
+                ([.[] | select(type == "object") | [.image, .digest]] | group_by(.) | map(select(length > 1))[]
+                  | "duplicate entries for \(.[0][0])@\(.[0][1])")
+              end'
+          today="$(date -u +%Y-%m-%d)"
+          jq -r --arg today "$today" "$check" "$out/baselines.raw.json" > "$out/baseline-errors.txt"
+          if [ -s "$out/baseline-errors.txt" ]; then
+            while IFS= read -r problem; do
+              echo "::error file=$BASELINE_FILE::$problem"
+            done < "$out/baseline-errors.txt"
+            exit 1
+          fi
+          cp "$out/baselines.raw.json" "$out/baselines.json"
+          echo "Loaded $(jq length "$out/baselines.json") baseline entr(ies) from $BASELINE_FILE:"
+          jq -r '.[] | "  \(.image)@\(.digest) [\(.platforms | join(", "))]: \(.findings | length) finding(s), reviewed by \(.reviewedBy) on \(.reviewedOn), expires \(.expires)"' \
+            "$out/baselines.json"
 
       - name: Configure ghcr.io credentials
         # A Docker config holding a ghcr.io credential only, in a directory of
@@ -428,10 +539,18 @@ jobs:
 
       - name: Scan images
         id: scan
-        # Per image: a report of every HIGH and CRITICAL finding (fixed or not)
-        # as JSON and SARIF, then the gate itself with the policy flags. Every
-        # image is scanned before the step fails, so one run lists them all.
-        # results.json is the machine-readable outcome (schema in the README).
+        # Per image: ONE Trivy scan reporting every HIGH and CRITICAL finding,
+        # fixed or not. The gate status and the findings both come from that
+        # one report, so they always describe the same image even when a tag
+        # is re-pushed mid-run. A finding is fixable when Trivy's Status is
+        # "fixed": exactly what --ignore-unfixed keeps (trivy v0.76.1
+        # pkg/flag/vulnerability_flags.go ignores every other status, and
+        # pkg/vulnerability/vulnerability.go sets "fixed" whenever FixedVersion
+        # is set). The report written to the artifact has the image config
+        # (env, history, layer CreatedBy) stripped; SARIF is converted from
+        # that stripped report. Every image is scanned before the step ends,
+        # so one run lists them all. results.json is the machine-readable
+        # outcome (schema in the README).
         shell: bash
         env:
           PLATFORM: ${{ inputs.platform }}
@@ -447,17 +566,22 @@ jobs:
             --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL
             --no-progress --timeout 15m)
 
-          # One result object per image: every HIGH/CRITICAL finding, flagged
-          # fixable when the policy gate reported it.
+          # Strips what is read from the image config: the config itself
+          # (env, entrypoint, labels, history) and every layer's CreatedBy
+          # (the history line), wherever Trivy repeats it.
+          sanitise='del(.Metadata.ImageConfig, (.. | objects | select(has("CreatedBy")) | .CreatedBy))'
+
+          # One result object per image: every HIGH/CRITICAL finding, fixable
+          # when Trivy's Status is "fixed" (see above). Duplicate keys are
+          # merged, fixable if any of them is.
           # shellcheck disable=SC2016
           result='
             def rows: [(.Results // [])[] | .Target as $t | (.Vulnerabilities // [])[]
               | {id: .VulnerabilityID, package: .PkgName, installedVersion: .InstalledVersion,
-                 fixedVersion: (.FixedVersion // ""), status: (.Status // ""), severity: .Severity, target: $t}];
+                 fixedVersion: (.FixedVersion // ""), status: (.Status // ""), severity: .Severity, target: $t,
+                 fixable: ((.Status // "") == "fixed")}];
             def key: [.id, .package, .installedVersion, .target];
-            ($report[0] | rows) as $all
-            | ($gate[0] | rows | map(key)) as $fixable
-            | ($all | unique_by(key) | map(key as $k | . + {fixable: ($fixable | index([$k]) != null)})) as $findings
+            ($report[0] | rows | group_by(key) | map((map(select(.fixable)) + .)[0])) as $findings
             | {reference: $ref, repository: $repo, digest: (if $digest == "" then null else $digest end),
                platform: $platform,
                status: (if $scan_error then "error"
@@ -466,7 +590,6 @@ jobs:
                         unfixed: ($findings | map(select(.fixable | not)) | length)},
                findings: $findings}'
 
-          failed=0
           n=0
           while IFS= read -r image; do
             [ -n "$image" ] || continue
@@ -486,76 +609,134 @@ jobs:
             fi
 
             echo "::group::$image"
+            raw="$out/images/$slug.trivy.json"
+            report="$reports/images/$slug.json"
             scan_error=false
-            if ! trivy image "${common[@]}" --format json --output "$reports/images/$slug.json" "$image"; then
+            # Any non-zero exit is an error: no --exit-code is set, so Trivy
+            # exits 0 with findings. A report that is not Trivy's schema 2
+            # JSON is an error too, never an empty, clean result.
+            if ! trivy image "${common[@]}" --format json --output "$raw" "$image"; then
+              scan_error=true
+            elif ! jq -e '.SchemaVersion == 2 and ((.Results // []) | type) == "array"' "$raw" > /dev/null; then
+              echo "::error::Trivy's report for $image is not a schema 2 JSON report."
               scan_error=true
             fi
-            # Gate: the policy, verbatim. Exit 1 means findings or an error;
-            # without the JSON it writes, it was an error.
-            rc=0
-            trivy image "${common[@]}" --ignore-unfixed --exit-code 1 \
-              --format json --output "$out/images/$slug.gate.json" "$image" || rc=$?
-            if [ "$rc" -ne 0 ] && [ ! -s "$out/images/$slug.gate.json" ]; then
-              scan_error=true
+            if [ "$scan_error" = false ]; then
+              jq "$sanitise" "$raw" > "$report"
+              trivy convert --format sarif --output "$reports/images/$slug.sarif" "$report"
+            else
+              echo '{}' > "$report"
             fi
-            for f in "$reports/images/$slug.json" "$out/images/$slug.gate.json"; do
-              [ -s "$f" ] || echo '{}' > "$f"
-            done
-            if [ "$scan_error" = false ] && [ "$rc" -ne 0 ] \
-              && [ "$(jq '[(.Results // [])[] | (.Vulnerabilities // [])[]] | length' "$out/images/$slug.gate.json")" -eq 0 ]; then
-              # A non-zero gate with no finding in its output is an error too.
-              scan_error=true
-            fi
-            jq -n --slurpfile report "$reports/images/$slug.json" \
-              --slurpfile gate "$out/images/$slug.gate.json" \
+            jq -n --slurpfile report "$report" \
               --arg ref "$image" --arg repo "$repo" --arg digest "$digest" --arg platform "$PLATFORM" \
               --argjson scan_error "$scan_error" "$result" > "$out/images/$slug.result.json"
-            if [ "$scan_error" = false ]; then
-              trivy convert --format sarif --output "$reports/images/$slug.sarif" "$reports/images/$slug.json"
-            fi
+            rm -f "$raw"
 
-            case "$(jq -r '.status' "$out/images/$slug.result.json")" in
+            if [ "$(jq -r '.status' "$out/images/$slug.result.json")" = error ]; then
+              echo "::error::Trivy could not scan $image for $PLATFORM; see the log above."
+            fi
+            echo "::endgroup::"
+          done < "$out/images.txt"
+          echo "Scanned $n image(s)."
+
+      - name: Apply baselines and gate
+        id: gate
+        # A fixable finding is baselined only when a reviewed entry names the
+        # image's repository, the digest its reference pins, the scanned
+        # platform, and the finding's exact ID, package, installed version and
+        # target. A CRITICAL is never baselined; a tag-only reference never
+        # matches. The job then fails on any image that could not be scanned
+        # or still has a fixable HIGH/CRITICAL. Baselined findings stay in
+        # results.json and the summary.
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trivy-image-scan"
+          reports="$out/reports"
+          mkdir -p "$reports"
+          jq -s '.' "$out"/images/*.result.json > "$out/images.results.json"
+
+          # shellcheck disable=SC2016
+          apply='
+            def key: [.id, .package, .installedVersion, .target];
+            $baselines[0] as $b
+            | $images[0] | map(
+                . as $img
+                | [$b[] | select(.image == $img.repository and $img.digest != null and .digest == $img.digest
+                    and (.platforms | index($img.platform) != null))] as $entries
+                | [$entries[].findings[] | key] as $keys
+                | .findings |= map(key as $k | . + {baselined: (.fixable and .severity != "CRITICAL"
+                    and ($keys | index([$k]) != null))})
+                | (.findings | map(key)) as $seen
+                | .counts.baselined = (.findings | map(select(.baselined)) | length)
+                | .baseline = (if ($entries | length) == 0 then null else
+                    ($entries[0] | {reviewedBy, reviewedOn, expires, reason,
+                      notFound: [.findings[] | select(key as $k | $seen | index([$k]) == null)],
+                      criticalNotBaselined: [$img.findings[] | select(.severity == "CRITICAL" and .fixable)
+                        | select(key as $k | $keys | index([$k]) != null)]}) end)
+                | .status = (if .status == "error" then "error"
+                    elif (.findings | map(select(.fixable and (.baselined | not))) | length) > 0 then "fail"
+                    else "pass" end))'
+          jq -n --slurpfile images "$out/images.results.json" \
+            --slurpfile baselines "$out/baselines.json" "$apply" > "$out/images.gated.json"
+
+          failed=0
+          while IFS= read -r row; do
+            ref="$(jq -r '.reference' <<< "$row")"
+            if jq -e '.baseline.criticalNotBaselined | length > 0' <<< "$row" > /dev/null; then
+              echo "::error::$ref: the baseline lists CRITICAL finding(s), which can never be baselined:"
+              jq -r '.baseline.criticalNotBaselined[] | "  \(.id) \(.package) \(.installedVersion)"' <<< "$row"
+            fi
+            if jq -e '.baseline.notFound | length > 0' <<< "$row" > /dev/null; then
+              echo "::warning::$ref: baseline finding(s) no longer reported by the scan; drop them from the entry:"
+              jq -r '.baseline.notFound[] | "  \(.id) \(.package) \(.installedVersion) (\(.target))"' <<< "$row"
+            fi
+            case "$(jq -r '.status' <<< "$row")" in
               error)
                 failed=1
-                echo "::error::Trivy could not scan $image for $PLATFORM; see the log above."
                 ;;
               fail)
                 failed=1
-                echo "::error::$image has $(jq '.counts.fixable' "$out/images/$slug.result.json") fixable HIGH/CRITICAL finding(s); bump it to a fixed release."
-                jq -r '.findings[] | select(.fixable) | "  \(.severity) \(.id) \(.package) \(.installedVersion) -> \(.fixedVersion) (\(.target))"' \
-                  "$out/images/$slug.result.json"
+                echo "::error::$ref has $(jq '[.findings[] | select(.fixable and (.baselined | not))] | length' <<< "$row") fixable HIGH/CRITICAL finding(s) not covered by a reviewed baseline; bump it to a fixed release."
+                jq -r '.findings[] | select(.fixable and (.baselined | not)) | "  \(.severity) \(.id) \(.package) \(.installedVersion) -> \(.fixedVersion) (\(.target))"' <<< "$row"
                 ;;
             esac
-            echo "::endgroup::"
-          done < "$out/images.txt"
+          done < <(jq -c '.[]' "$out/images.gated.json")
 
           status=pass
           [ "$failed" -eq 0 ] || status=fail
-          jq -s '.' "$out"/images/*.result.json > "$out/images.results.json"
-          jq -n --slurpfile images "$out/images.results.json" \
+          jq -n --slurpfile images "$out/images.gated.json" \
             --slurpfile version "$out/trivy-version.json" \
             --arg platform "$PLATFORM" --arg status "$status" '
-            {schemaVersion: 1,
+            {schemaVersion: 2,
              status: $status,
              platform: $platform,
              policy: {severities: ["HIGH", "CRITICAL"], ignoreUnfixed: true,
-                      fails: "any HIGH or CRITICAL finding with a fix available"},
+                      fails: "any HIGH or CRITICAL finding with a fix available that no reviewed baseline covers (a CRITICAL is never baselined)"},
              trivy: {version: $version[0].Version,
                      vulnerabilityDB: {updatedAt: $version[0].VulnerabilityDB.UpdatedAt}},
              images: ($images[0] | sort_by(.reference))}' > "$reports/results.json"
 
-          # Summary: one row per image, then the fixable findings per image.
+          # Summary: one row per image, then the failing and baselined findings.
           {
-            echo "Scanned $n image(s) for \`$PLATFORM\` with Trivy $(jq -r '.trivy.version' "$reports/results.json") (DB $(jq -r '.trivy.vulnerabilityDB.updatedAt' "$reports/results.json")); policy: fail on HIGH/CRITICAL with a fix available."
+            echo "Scanned $(jq '.images | length' "$reports/results.json") image(s) for \`$PLATFORM\` with Trivy $(jq -r '.trivy.version' "$reports/results.json") (DB $(jq -r '.trivy.vulnerabilityDB.updatedAt' "$reports/results.json")); policy: fail on HIGH/CRITICAL with a fix available, unless a reviewed baseline covers it."
             echo ""
-            echo "| Image | Result | Fixable HIGH/CRITICAL | Unfixed HIGH/CRITICAL (reported only) |"
-            echo "| --- | --- | --- | --- |"
-            jq -r '.images[] | "| `\(.reference)` | \({pass: "pass", fail: "**FAIL**", error: "**SCAN ERROR**"}[.status]) | \(.counts.fixable) | \(.counts.unfixed) |"' \
+            echo "| Image | Result | Fixable HIGH/CRITICAL | Of which baselined | Unfixed HIGH/CRITICAL (reported only) |"
+            echo "| --- | --- | --- | --- | --- |"
+            jq -r '.images[] | "| `\(.reference)` | \({pass: "pass", fail: "**FAIL**", error: "**SCAN ERROR**"}[.status]) | \(.counts.fixable) | \(.counts.baselined) | \(.counts.unfixed) |"' \
               "$reports/results.json"
             jq -r '.images[] | select(.status == "fail")
-              | "", "**`\(.reference)`** fixable findings:", "",
+              | "", "**`\(.reference)`** fixable findings not baselined:", "",
                 "| Severity | ID | Package | Installed | Fixed in | Target |", "| --- | --- | --- | --- | --- | --- |",
-                (.findings[] | select(.fixable)
+                (.findings[] | select(.fixable and (.baselined | not))
+                  | "| \(.severity) | \(.id) | `\(.package)` | \(.installedVersion) | \(.fixedVersion) | `\(.target)` |")' \
+              "$reports/results.json"
+            jq -r '.images[] | select(.counts.baselined > 0)
+              | "", "**`\(.reference)`** baselined findings (reviewed by \(.baseline.reviewedBy) on \(.baseline.reviewedOn), expires \(.baseline.expires)):", "",
+                "| Severity | ID | Package | Installed | Fixed in | Target |", "| --- | --- | --- | --- | --- | --- |",
+                (.findings[] | select(.baselined)
                   | "| \(.severity) | \(.id) | `\(.package)` | \(.installedVersion) | \(.fixedVersion) | `\(.target)` |")' \
               "$reports/results.json"
           } > "$out/summary.md"
@@ -564,21 +745,25 @@ jobs:
           if [ "$failed" -ne 0 ]; then
             exit 1
           fi
-          echo "OK: no image has a fixable HIGH or CRITICAL vulnerability"
+          echo "OK: no image has a fixable HIGH or CRITICAL vulnerability outside a reviewed baseline"
 
       - name: Upload scan reports
-        if: always() && hashFiles(format('{0}/trivy-image-scan/reports/**', runner.temp)) != ''
+        # hashFiles() only sees GITHUB_WORKSPACE, so it cannot test for these
+        # files under RUNNER_TEMP; an earlier failure that wrote no report is
+        # handled by if-no-files-found instead.
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ runner.temp }}/trivy-image-scan/reports/
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: scan summary
         if: always()
         shell: bash
         env:
-          OUTCOME: ${{ steps.scan.outcome }}
+          OUTCOME: ${{ steps.gate.outcome }}
         run: |
           set -euo pipefail
           summary="$RUNNER_TEMP/trivy-image-scan/summary.md"
@@ -586,14 +771,15 @@ jobs:
             echo "### Trivy Image Scan"
             case "$OUTCOME" in
               success)
-                echo "No scanned image has a fixable HIGH or CRITICAL vulnerability."
+                echo "No scanned image has a fixable HIGH or CRITICAL vulnerability outside a reviewed baseline."
                 ;;
               failure)
-                echo "**FAILED** — an image has a fixable HIGH or CRITICAL vulnerability (bump its pin to a fixed release), or could not be scanned."
+                echo "**FAILED** — an image has a fixable HIGH or CRITICAL vulnerability no reviewed baseline covers (bump its pin to a fixed release), or could not be scanned."
                 ;;
               *)
                 # An earlier step failed (tool install, checksum, render,
-                # extraction or DB download), so the scan never ran.
+                # extraction, baseline file, DB download or the scan itself),
+                # so the gate never ran.
                 echo "**NOT RUN** — an earlier step failed before the scan."
                 echo ""
                 echo "- Review the job logs for the failing step."
