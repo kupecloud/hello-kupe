@@ -26,3 +26,10 @@ resources:
 image:
   repository: ghcr.io/kupecloud/hello-kupe
   tag: "1.8.4@sha256:d266852ca8ad0a5562c9e13d5f6f5e2fcd66b38f410e5cf5a3d7568b678ab2de"
+
+# Release verification reads this namespace's vulnerability reports.
+vulnerabilityReportReader:
+  enabled: true
+  serviceAccount:
+    name: kupe-runner-onb-mission-observer
+    namespace: kupe-system

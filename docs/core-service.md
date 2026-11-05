@@ -21,8 +21,12 @@ Actions signing identity.
 The ArgoCD repo owns this Application through `coreServices.charts`, scoped
 only to `mgmt` destinations. Its management gateway values also allow the
 `hello-kupe` namespace. Run the ArgoCD repo's normal production upgrade after
-reviewing its local changes. The game chart itself creates no cluster, registry,
-database, or access binding.
+reviewing its local changes. The game chart itself creates no cluster, registry
+or database. Its only access binding is optional: with
+`vulnerabilityReportReader.enabled`, the chart grants a release-verification
+ServiceAccount get and list on the Trivy `vulnerabilityreports` in its own
+namespace. It is off by default and on in `chart/values/mgmt/prod.yaml`;
+`.github/hooks/report-reader-render.sh` checks the render.
 
 The chart permits only `/`, `/api`, `/_next/static`, and `/kupe-mark.svg` on its
 public route. Health, readiness and metrics endpoints stay internal.
