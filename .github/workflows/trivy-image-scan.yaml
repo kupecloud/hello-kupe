@@ -1,0 +1,615 @@
+name: Trivy Image Scan
+
+# The public-repo copy of github-workflows' trivy-image-scan.yaml (at
+# kupecloud/github-workflows#23, 1fdb1f0c2e548d9a5c931809634cb88eb5372789):
+# github-workflows is private, so a public repo cannot call it, as gates.yaml
+# copies pre-commit-gates.yaml. Keep it in step with the shared file; change
+# nothing below this paragraph except to match it.
+#
+# Scans every container image a repository deploys, first-party and
+# third-party, with Trivy. Images come from any mix of three sources:
+#
+#   - a Helm chart, rendered once per values-files line;
+#   - YAML files (Kubernetes manifests, docker-compose files), read as they are;
+#   - an explicit image list.
+#
+# From the rendered and raw YAML, every `image:` and `imageName:` string at any
+# depth is taken: containers and initContainers of every workload kind, pod
+# templates embedded in other resources, CloudNativePG's imageName and compose
+# services alike. Values that are not image references (a Kyverno pattern such
+# as "!*:latest") are listed and skipped. The list is deduplicated and each
+# image is scanned for linux/amd64 (every prod node).
+#
+# Policy: the job FAILS on any HIGH or CRITICAL vulnerability that has a fix
+# available (trivy --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1).
+# HIGH and CRITICAL findings with no fix are reported, not failed. A third-party
+# image fails too when upstream has a fixed release: the fix is bumping the pin.
+# There is no waiver input.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          Runner label. Empty (the default) picks by repository visibility,
+          as pre-commit-gates does: kupe-small for a private repository,
+          ubuntu-latest for a public one. The runner needs bash, curl, jq and
+          tar, and egress to github.com, mirror.gcr.io (the Trivy DB) and
+          every registry the images live in.
+        required: false
+        default: ""
+        type: string
+      chart-path:
+        description: Path to the Helm chart directory. Empty skips the chart render.
+        required: false
+        default: ""
+        type: string
+      values-files:
+        description: >-
+          Values files to render, one render per line. Each line is one or more
+          whitespace-separated paths, passed to helm template as -f in order
+          after template-args, so a line such as "values.yaml values/prod.yaml"
+          layers prod over the base file. Blank lines and lines starting with
+          # are skipped. Empty renders the chart once with template-args only.
+          Ignored when chart-path is empty.
+        required: false
+        default: ""
+        type: string
+      template-args:
+        description: Arguments passed to every helm template render, before the values-files line (shell words, e.g. "--set global.env=prod")
+        required: false
+        default: ""
+        type: string
+      release-name:
+        description: Release name for helm template
+        required: false
+        default: "scan"
+        type: string
+      manifests:
+        description: >-
+          YAML files read without rendering, one path or bash glob per line
+          (globstar on, so "deploy/**/*.yaml" works): Kubernetes manifests,
+          docker-compose files. A line that matches no file fails the job.
+          Blank lines and lines starting with # are skipped.
+        required: false
+        default: ""
+        type: string
+      images:
+        description: >-
+          Image references to scan as well, one per line, for images no YAML
+          in the repository names (for example one an operator creates from a
+          value embedded in a string). Blank lines and lines starting with #
+          are skipped.
+        required: false
+        default: ""
+        type: string
+      platform:
+        description: Image platform to scan (the prod node platform)
+        required: false
+        default: linux/amd64
+        type: string
+      artifact-name:
+        description: Name of the uploaded report artifact (results.json, per-image JSON and SARIF)
+        required: false
+        default: trivy-image-scan
+        type: string
+      ghcr-login:
+        description: >-
+          Authenticate to ghcr.io (only) with the job's GITHUB_TOKEN so private
+          first-party images can be scanned. The caller's job must grant
+          `packages: read`, and each private package must give the calling
+          repository read access.
+        required: false
+        default: true
+        type: boolean
+      helm-version:
+        description: Helm version used to render the chart
+        required: false
+        # renovate: github-releases=helm/helm
+        default: v4.3.0
+        type: string
+      yq-version:
+        description: yq release to install (linux amd64 binary)
+        required: false
+        default: v4.52.5
+        type: string
+      yq-sha256:
+        description: >-
+          SHA-256 of yq_linux_amd64 for yq-version, from that release's
+          `checksums` file (SHA-256 column, see `checksums_hashes_order`).
+          Change it together with yq-version.
+        required: false
+        default: 75d893a0d5940d1019cb7cdc60001d9e876623852c31cfc6267047bc31149fa9
+        type: string
+      trivy-version:
+        description: Trivy release to install (Linux-64bit tarball)
+        required: false
+        # renovate: github-release-attachments=aquasecurity/trivy
+        default: v0.76.1
+        type: string
+      trivy-sha256:
+        description: >-
+          SHA-256 of trivy_<version>_Linux-64bit.tar.gz for trivy-version, from
+          that release's trivy_<version>_checksums.txt. Renovate bumps it with
+          trivy-version; by hand, change both together.
+        required: false
+        default: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  image-scan:
+    name: trivy image scan
+    runs-on: ${{ inputs.runs-on != '' && inputs.runs-on || (github.event.repository.private && 'kupe-small' || 'ubuntu-latest') }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ inputs.helm-version }}
+
+      - name: Install yq and trivy
+        # Every download is checked against the SHA-256 its upstream release
+        # publishes before it is unpacked or run, so a swapped or truncated
+        # asset fails the job instead of running. Installs to a user-writable
+        # location for self-hosted runners without passwordless sudo.
+        shell: bash
+        env:
+          YQ_VERSION: ${{ inputs.yq-version }}
+          YQ_SHA256: ${{ inputs.yq-sha256 }}
+          TRIVY_VERSION: ${{ inputs.trivy-version }}
+          TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bin"
+          dl="$(mktemp -d -p "$RUNNER_TEMP")"
+          mkdir -p "$bin"
+
+          # fetch <tool> <url> <sha256> <file>: download, then verify or fail.
+          # <tool> is the prefix of the <tool>-version / <tool>-sha256 inputs,
+          # so a mismatch tells the caller which pair to change.
+          fetch() {
+            local tool="$1" url="$2" want="$3" file="$4" got
+            if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::${tool}-sha256 must be a 64-character lowercase hex sha256, got '$want'"
+              exit 1
+            fi
+            curl -fsSLo "$file" "$url"
+            got="$(sha256sum < "$file")"
+            got="${got%% *}"
+            if [ "$got" != "$want" ]; then
+              echo "::error::${tool} sha256 mismatch for $url: expected $want, got $got. Set the ${tool}-sha256 input together with ${tool}-version."
+              exit 1
+            fi
+          }
+
+          fetch yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+            "$YQ_SHA256" "$dl/yq"
+          install -m 0755 "$dl/yq" "$bin/yq"
+
+          fetch trivy "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz" \
+            "$TRIVY_SHA256" "$dl/trivy.tar.gz"
+          tar -xzf "$dl/trivy.tar.gz" -C "$dl" trivy
+          install -m 0755 "$dl/trivy" "$bin/trivy"
+
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Render chart
+        # One helm template per values-files line, each to its own file, with
+        # stderr left on the log so a render warning or failure is visible.
+        shell: bash
+        env:
+          RELEASE_NAME: ${{ inputs.release-name }}
+          CHART_PATH: ${{ inputs.chart-path }}
+          TEMPLATE_ARGS: ${{ inputs.template-args }}
+          VALUES_FILES: ${{ inputs.values-files }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trivy-image-scan"
+          rm -rf "$out"
+          mkdir -p "$out"
+          if [ -z "$CHART_PATH" ]; then
+            echo "No chart-path; no chart to render."
+            exit 0
+          fi
+          # template-args is shell words, parsed the same way as in the helm
+          # audit workflows.
+          eval "args=($TEMPLATE_ARGS)"
+          n=0
+
+          # render <label> [values file...]: one helm template into $out/<n>.yaml.
+          render() {
+            local label="$1" f
+            shift
+            local vargs=()
+            for f in "$@"; do
+              vargs+=(-f "$f")
+            done
+            n=$((n + 1))
+            printf '%s\n' "$label" > "$out/$n.label"
+            echo "Rendering $n: $label"
+            helm template "$RELEASE_NAME" "$CHART_PATH" \
+              ${args[@]+"${args[@]}"} ${vargs[@]+"${vargs[@]}"} \
+              < /dev/null > "$out/$n.yaml"
+          }
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in
+              '' | '#'*) continue ;;
+            esac
+            read -r -a files <<< "$line"
+            render "$line" "${files[@]}"
+          done <<< "$VALUES_FILES"
+
+          if [ "$n" -eq 0 ]; then
+            render "chart defaults and template-args"
+          fi
+
+      - name: Extract images
+        # Every image reference from the chart renders, the manifests and the
+        # images input, deduplicated into images.txt; refs.tsv records where
+        # each one came from.
+        shell: bash
+        env:
+          MANIFESTS: ${{ inputs.manifests }}
+          IMAGES: ${{ inputs.images }}
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          out="$RUNNER_TEMP/trivy-image-scan"
+          mkdir -p "$out"
+          tab=$'\t'
+          bad=0
+          # Every `image:` or `imageName:` string at any depth of every
+          # document, as "<Kind>/<name> <path>\t<value>". ConfigMap and Secret
+          # data is opaque (a key called image is just a key), so those kinds
+          # are skipped. No `|| true`: a yq error must fail the gate, never
+          # read as an empty, clean result.
+          # shellcheck disable=SC2016
+          expr='select(.kind != "ConfigMap" and .kind != "Secret")
+            | (.kind // "") as $k | (.metadata.name // "") as $n
+            | .. | select(tag == "!!map") | (path | map(tostring) | join(".")) as $p
+            | to_entries[] | select((.key == "image" or .key == "imageName") and (.value | tag) == "!!str")
+            | $k + "/" + $n + " " + ([$p, .key] | map(select(. != "")) | join(".")) + "\t" + .value'
+          # A docker reference: lowercase name components with an optional
+          # registry host[:port], then an optional tag and an optional digest.
+          # A value holding a glob, negation or template character is a policy
+          # pattern or placeholder, not an image: listed and skipped. Anything
+          # else that is not a valid reference (a truncated digest, say) fails.
+          pattern_re='[][*!?{}$<>|[:space:]]'
+          ref_re='^[a-z0-9]+([._-]+[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-]+[a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[a-f0-9]{64})?$'
+
+          : > "$out/refs.tsv"
+          : > "$out/skipped.tsv"
+
+          # extract <label> <file> <require-image>: add every image in <file>.
+          # With require-image=1 a file with no image fails the job (a chart
+          # render with nothing to scan means a wrong chart path or values).
+          extract() {
+            local label="$1" file="$2" require="$3" found=0 target image
+            # To a file first: a yq error inside <(...) would not stop the job.
+            yq -N "$expr" "$file" > "$out/extract.tsv"
+            while IFS="$tab" read -r target image; do
+              [ -n "$target" ] || continue
+              if [ -z "$image" ]; then
+                echo "::error::$target is an empty image ($label)"
+                bad=1
+              elif [[ "$image" =~ $ref_re ]]; then
+                printf '%s\t%s\t%s\n' "$image" "$target" "$label" >> "$out/refs.tsv"
+                found=1
+              elif [[ "$image" =~ $pattern_re ]]; then
+                printf '%s\t%s\t%s\n' "$image" "$target" "$label" >> "$out/skipped.tsv"
+              else
+                echo "::error::$target is '$image', which is neither an image reference nor a pattern ($label)"
+                bad=1
+              fi
+            done < "$out/extract.tsv"
+            if [ "$require" = 1 ] && [ "$found" -eq 0 ]; then
+              echo "::error::'$label' has no image to scan; check the chart path and values files."
+              bad=1
+            fi
+          }
+
+          sources=0
+          i=1
+          while [ -f "$out/$i.yaml" ]; do
+            extract "render: $(cat "$out/$i.label")" "$out/$i.yaml" 1
+            sources=$((sources + 1))
+            i=$((i + 1))
+          done
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in
+              '' | '#'*) continue ;;
+            esac
+            # The line is a glob on purpose: expand it unquoted.
+            # shellcheck disable=SC2206
+            matches=($line)
+            if [ "${#matches[@]}" -eq 0 ]; then
+              echo "::error::manifests line '$line' matches no file."
+              bad=1
+              continue
+            fi
+            for f in "${matches[@]}"; do
+              extract "$f" "$f" 0
+              sources=$((sources + 1))
+            done
+          done <<< "$MANIFESTS"
+
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in
+              '' | '#'*) continue ;;
+            esac
+            if ! [[ "$line" =~ $ref_re ]]; then
+              echo "::error::images line '$line' is not an image reference."
+              bad=1
+              continue
+            fi
+            printf '%s\t%s\t%s\n' "$line" "images input" "images input" >> "$out/refs.tsv"
+            sources=$((sources + 1))
+          done <<< "$IMAGES"
+
+          if [ "$sources" -eq 0 ]; then
+            echo "::error::Nothing to scan: set chart-path, manifests or images."
+            exit 1
+          fi
+
+          cut -f1 "$out/refs.tsv" | LC_ALL=C sort -u > "$out/images.txt"
+          if [ ! -s "$out/images.txt" ]; then
+            echo "::error::No image reference found in any source."
+            bad=1
+          fi
+          echo "Found $(wc -l < "$out/images.txt" | tr -d ' ') unique image(s):"
+          while IFS="$tab" read -r image target label; do
+            echo "  $image  <- $target ($label)"
+          done < <(LC_ALL=C sort -u "$out/refs.tsv")
+          if [ -s "$out/skipped.tsv" ]; then
+            echo "Skipped (not an image reference):"
+            while IFS="$tab" read -r image target label; do
+              echo "  '$image'  <- $target ($label)"
+            done < <(LC_ALL=C sort -u "$out/skipped.tsv")
+          fi
+          if [ "$bad" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Configure ghcr.io credentials
+        # A Docker config holding a ghcr.io credential only, in a directory of
+        # its own, so the token is never offered to any other registry.
+        if: inputs.ghcr-login
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d -p "$RUNNER_TEMP")"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          umask 077
+          printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$auth" > "$dir/config.json"
+          echo "DOCKER_CONFIG=$dir" >> "$GITHUB_ENV"
+
+      - name: Download vulnerability DB
+        # A fresh cache directory per job, so the DB is always downloaded and
+        # never served stale from a runner cache. A download failure, or a DB
+        # older than 24 h (a stale mirror), fails the job.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v jq > /dev/null; then
+            echo "::error::jq is required on the runner (ubuntu-latest and the kupe runner image ship it)."
+            exit 1
+          fi
+          out="$RUNNER_TEMP/trivy-image-scan"
+          cache="$RUNNER_TEMP/trivy-cache"
+          rm -rf "$cache"
+          trivy image --cache-dir "$cache" --download-db-only --no-progress
+          trivy version --cache-dir "$cache" --format json > "$out/trivy-version.json"
+          updated="$(jq -r '.VulnerabilityDB.UpdatedAt' "$out/trivy-version.json")"
+          # UpdatedAt is RFC 3339 with nanoseconds; whole seconds are enough.
+          age="$(jq -r '.VulnerabilityDB.UpdatedAt | sub("\\.[0-9]+"; "") | now - fromdateiso8601 | floor' \
+            "$out/trivy-version.json")"
+          echo "Trivy vulnerability DB updated $updated ($((age / 3600)) h ago)"
+          if [ "$age" -gt 86400 ]; then
+            echo "::error::Trivy vulnerability DB is $((age / 3600)) h old (updated $updated); refusing to scan with a stale DB."
+            exit 1
+          fi
+
+      - name: Scan images
+        id: scan
+        # Per image: a report of every HIGH and CRITICAL finding (fixed or not)
+        # as JSON and SARIF, then the gate itself with the policy flags. Every
+        # image is scanned before the step fails, so one run lists them all.
+        # results.json is the machine-readable outcome (schema in the README).
+        shell: bash
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trivy-image-scan"
+          cache="$RUNNER_TEMP/trivy-cache"
+          reports="$out/reports"
+          rm -rf "$reports" "$out/images"
+          mkdir -p "$reports/images" "$out/images"
+          # shellcheck disable=SC2054 # HIGH,CRITICAL is one comma-separated flag value
+          common=(--cache-dir "$cache" --skip-db-update --image-src remote
+            --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL
+            --no-progress --timeout 15m)
+
+          # One result object per image: every HIGH/CRITICAL finding, flagged
+          # fixable when the policy gate reported it.
+          # shellcheck disable=SC2016
+          result='
+            def rows: [(.Results // [])[] | .Target as $t | (.Vulnerabilities // [])[]
+              | {id: .VulnerabilityID, package: .PkgName, installedVersion: .InstalledVersion,
+                 fixedVersion: (.FixedVersion // ""), status: (.Status // ""), severity: .Severity, target: $t}];
+            def key: [.id, .package, .installedVersion, .target];
+            ($report[0] | rows) as $all
+            | ($gate[0] | rows | map(key)) as $fixable
+            | ($all | unique_by(key) | map(key as $k | . + {fixable: ($fixable | index([$k]) != null)})) as $findings
+            | {reference: $ref, repository: $repo, digest: (if $digest == "" then null else $digest end),
+               platform: $platform,
+               status: (if $scan_error then "error"
+                        elif ($findings | map(select(.fixable)) | length) > 0 then "fail" else "pass" end),
+               counts: {fixable: ($findings | map(select(.fixable)) | length),
+                        unfixed: ($findings | map(select(.fixable | not)) | length)},
+               findings: $findings}'
+
+          failed=0
+          n=0
+          while IFS= read -r image; do
+            [ -n "$image" ] || continue
+            n=$((n + 1))
+            slug="$(printf '%s' "$image" | tr -c 'A-Za-z0-9._-' '_')"
+            # Repository and digest of the reference as written.
+            digest=""
+            name="$image"
+            if [[ "$image" == *@* ]]; then
+              digest="${image##*@}"
+              name="${image%@*}"
+            fi
+            repo="$name"
+            last="${name##*/}"
+            if [[ "$last" == *:* ]]; then
+              repo="${name%:*}"
+            fi
+
+            echo "::group::$image"
+            scan_error=false
+            if ! trivy image "${common[@]}" --format json --output "$reports/images/$slug.json" "$image"; then
+              scan_error=true
+            fi
+            # Gate: the policy, verbatim. Exit 1 means findings or an error;
+            # without the JSON it writes, it was an error.
+            rc=0
+            trivy image "${common[@]}" --ignore-unfixed --exit-code 1 \
+              --format json --output "$out/images/$slug.gate.json" "$image" || rc=$?
+            if [ "$rc" -ne 0 ] && [ ! -s "$out/images/$slug.gate.json" ]; then
+              scan_error=true
+            fi
+            for f in "$reports/images/$slug.json" "$out/images/$slug.gate.json"; do
+              [ -s "$f" ] || echo '{}' > "$f"
+            done
+            if [ "$scan_error" = false ] && [ "$rc" -ne 0 ] \
+              && [ "$(jq '[(.Results // [])[] | (.Vulnerabilities // [])[]] | length' "$out/images/$slug.gate.json")" -eq 0 ]; then
+              # A non-zero gate with no finding in its output is an error too.
+              scan_error=true
+            fi
+            jq -n --slurpfile report "$reports/images/$slug.json" \
+              --slurpfile gate "$out/images/$slug.gate.json" \
+              --arg ref "$image" --arg repo "$repo" --arg digest "$digest" --arg platform "$PLATFORM" \
+              --argjson scan_error "$scan_error" "$result" > "$out/images/$slug.result.json"
+            if [ "$scan_error" = false ]; then
+              trivy convert --format sarif --output "$reports/images/$slug.sarif" "$reports/images/$slug.json"
+            fi
+
+            case "$(jq -r '.status' "$out/images/$slug.result.json")" in
+              error)
+                failed=1
+                echo "::error::Trivy could not scan $image for $PLATFORM; see the log above."
+                ;;
+              fail)
+                failed=1
+                echo "::error::$image has $(jq '.counts.fixable' "$out/images/$slug.result.json") fixable HIGH/CRITICAL finding(s); bump it to a fixed release."
+                jq -r '.findings[] | select(.fixable) | "  \(.severity) \(.id) \(.package) \(.installedVersion) -> \(.fixedVersion) (\(.target))"' \
+                  "$out/images/$slug.result.json"
+                ;;
+            esac
+            echo "::endgroup::"
+          done < "$out/images.txt"
+
+          status=pass
+          [ "$failed" -eq 0 ] || status=fail
+          jq -s '.' "$out"/images/*.result.json > "$out/images.results.json"
+          jq -n --slurpfile images "$out/images.results.json" \
+            --slurpfile version "$out/trivy-version.json" \
+            --arg platform "$PLATFORM" --arg status "$status" '
+            {schemaVersion: 1,
+             status: $status,
+             platform: $platform,
+             policy: {severities: ["HIGH", "CRITICAL"], ignoreUnfixed: true,
+                      fails: "any HIGH or CRITICAL finding with a fix available"},
+             trivy: {version: $version[0].Version,
+                     vulnerabilityDB: {updatedAt: $version[0].VulnerabilityDB.UpdatedAt}},
+             images: ($images[0] | sort_by(.reference))}' > "$reports/results.json"
+
+          # Summary: one row per image, then the fixable findings per image.
+          {
+            echo "Scanned $n image(s) for \`$PLATFORM\` with Trivy $(jq -r '.trivy.version' "$reports/results.json") (DB $(jq -r '.trivy.vulnerabilityDB.updatedAt' "$reports/results.json")); policy: fail on HIGH/CRITICAL with a fix available."
+            echo ""
+            echo "| Image | Result | Fixable HIGH/CRITICAL | Unfixed HIGH/CRITICAL (reported only) |"
+            echo "| --- | --- | --- | --- |"
+            jq -r '.images[] | "| `\(.reference)` | \({pass: "pass", fail: "**FAIL**", error: "**SCAN ERROR**"}[.status]) | \(.counts.fixable) | \(.counts.unfixed) |"' \
+              "$reports/results.json"
+            jq -r '.images[] | select(.status == "fail")
+              | "", "**`\(.reference)`** fixable findings:", "",
+                "| Severity | ID | Package | Installed | Fixed in | Target |", "| --- | --- | --- | --- | --- | --- |",
+                (.findings[] | select(.fixable)
+                  | "| \(.severity) | \(.id) | `\(.package)` | \(.installedVersion) | \(.fixedVersion) | `\(.target)` |")' \
+              "$reports/results.json"
+          } > "$out/summary.md"
+          cat "$out/summary.md"
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "OK: no image has a fixable HIGH or CRITICAL vulnerability"
+
+      - name: Upload scan reports
+        if: always() && hashFiles(format('{0}/trivy-image-scan/reports/**', runner.temp)) != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/trivy-image-scan/reports/
+          retention-days: 30
+
+      - name: scan summary
+        if: always()
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          set -euo pipefail
+          summary="$RUNNER_TEMP/trivy-image-scan/summary.md"
+          {
+            echo "### Trivy Image Scan"
+            case "$OUTCOME" in
+              success)
+                echo "No scanned image has a fixable HIGH or CRITICAL vulnerability."
+                ;;
+              failure)
+                echo "**FAILED** — an image has a fixable HIGH or CRITICAL vulnerability (bump its pin to a fixed release), or could not be scanned."
+                ;;
+              *)
+                # An earlier step failed (tool install, checksum, render,
+                # extraction or DB download), so the scan never ran.
+                echo "**NOT RUN** — an earlier step failed before the scan."
+                echo ""
+                echo "- Review the job logs for the failing step."
+                ;;
+            esac
+            if [ -f "$summary" ]; then
+              echo ""
+              cat "$summary"
+            fi
+            skipped="$RUNNER_TEMP/trivy-image-scan/skipped.tsv"
+            if [ -s "$skipped" ]; then
+              echo ""
+              echo "**Skipped** (patterns or placeholders, not image references):"
+              echo ""
+              LC_ALL=C sort -u "$skipped" | while IFS=$'\t' read -r image target label; do
+                echo "- \`$image\` at \`$target\` ($label)"
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -33,6 +33,27 @@ on:
         required: false
         type: string
         default: ""
+      scan-platform:
+        description: >-
+          Platform of the pushed image that Trivy scans before any tag is
+          applied (the prod node platform). Must be one of platforms.
+        required: false
+        type: string
+        default: linux/amd64
+      trivy-version:
+        description: Trivy release to install (Linux-64bit tarball)
+        required: false
+        # renovate: github-release-attachments=aquasecurity/trivy
+        default: v0.76.1
+        type: string
+      trivy-sha256:
+        description: >-
+          SHA-256 of trivy_<version>_Linux-64bit.tar.gz for trivy-version, from
+          that release's trivy_<version>_checksums.txt. Renovate bumps it with
+          trivy-version; by hand, change both together.
+        required: false
+        default: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+        type: string
     outputs:
       digest:
         description: >-
@@ -82,17 +103,138 @@ jobs:
             type=raw,value=${{ inputs.version }}
             type=raw,value=v${{ inputs.version }}
 
-      - name: Build and push image
+      - name: Build and push image by digest
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
-          push: true
           platforms: ${{ inputs.platforms }}
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ inputs.build-args }}
+          # Pushed by digest with NO tag: nothing can pull it by a version or
+          # `main` tag until the scan below passes and "Promote tags" runs. A
+          # failed scan leaves an untagged manifest that cleanup-ghcr prunes.
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Install trivy
+        # The download is checked against the SHA-256 its upstream release
+        # publishes before it is unpacked or run. Installs to a user-writable
+        # location for self-hosted runners without passwordless sudo.
+        shell: bash
+        env:
+          TRIVY_VERSION: ${{ inputs.trivy-version }}
+          TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TRIVY_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::trivy-sha256 must be a 64-character lowercase hex sha256, got '$TRIVY_SHA256'"
+            exit 1
+          fi
+          bin="$RUNNER_TEMP/bin"
+          dl="$(mktemp -d -p "$RUNNER_TEMP")"
+          mkdir -p "$bin"
+          url="https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
+          curl -fsSLo "$dl/trivy.tar.gz" "$url"
+          got="$(sha256sum < "$dl/trivy.tar.gz")"
+          got="${got%% *}"
+          if [ "$got" != "$TRIVY_SHA256" ]; then
+            echo "::error::trivy sha256 mismatch for $url: expected $TRIVY_SHA256, got $got. Set the trivy-sha256 input together with trivy-version."
+            exit 1
+          fi
+          tar -xzf "$dl/trivy.tar.gz" -C "$dl" trivy
+          install -m 0755 "$dl/trivy" "$bin/trivy"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Scan image
+        # Policy: fail on any HIGH or CRITICAL vulnerability with a fix
+        # available; HIGH and CRITICAL with no fix are reported only. The
+        # vulnerability DB is downloaded fresh into this job's own cache
+        # directory (never a stale runner cache) and must be under 24 h old.
+        # Trivy reads the GHCR login above from the Docker config.
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ inputs.scan-platform }}
+        run: |
+          set -euo pipefail
+          cache="$RUNNER_TEMP/trivy-cache"
+          reports="$RUNNER_TEMP/trivy-reports"
+          rm -rf "$cache" "$reports"
+          mkdir -p "$reports"
+          trivy image --cache-dir "$cache" --download-db-only --no-progress
+          version="$(trivy version --cache-dir "$cache" --format json)"
+          # The first UpdatedAt in the output is the vulnerability DB's.
+          if ! [[ "$version" =~ \"UpdatedAt\":\"([0-9T:-]+) ]]; then
+            echo "::error::Could not read the Trivy vulnerability DB date: $version"
+            exit 1
+          fi
+          updated="${BASH_REMATCH[1]}"
+          age=$(( $(date -u +%s) - $(date -u -d "${updated}Z" +%s) ))
+          echo "Trivy vulnerability DB updated ${updated}Z ($((age / 3600)) h ago)"
+          if [ "$age" -gt 86400 ]; then
+            echo "::error::Trivy vulnerability DB is $((age / 3600)) h old; refusing to scan with a stale DB."
+            exit 1
+          fi
+
+          # shellcheck disable=SC2054 # HIGH,CRITICAL is one comma-separated flag value
+          common=(--cache-dir "$cache" --skip-db-update --image-src remote
+            --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL
+            --no-progress --timeout 15m)
+          # Report: every HIGH and CRITICAL finding, fixed or not.
+          trivy image "${common[@]}" --format json --output "$reports/image.json" "$IMAGE"
+          trivy convert --format sarif --output "$reports/image.sarif" "$reports/image.json"
+          # Gate: the policy, verbatim.
+          rc=0
+          trivy image "${common[@]}" --ignore-unfixed --exit-code 1 "$IMAGE" | tee "$reports/gate.txt" || rc=$?
+          {
+            echo "### Trivy image scan"
+            echo ""
+            echo "\`$IMAGE\` for \`$PLATFORM\`: fail on HIGH/CRITICAL with a fix available."
+            echo ""
+            echo '```'
+            cat "$reports/gate.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::$IMAGE has a fixable HIGH or CRITICAL vulnerability (or could not be scanned); no tag was applied. Update the base image or dependency and release again."
+            exit 1
+          fi
+
+      - name: Upload scan report
+        if: always() && hashFiles(format('{0}/trivy-reports/*', runner.temp)) != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: trivy-image-scan
+          path: ${{ runner.temp }}/trivy-reports/
+          retention-days: 30
+
+      - name: Promote tags
+        # Points every tag at the scanned digest. imagetools create with one
+        # source copies its manifest unchanged, so each tag resolves to exactly
+        # the digest that was scanned and is signed below; the check refuses
+        # anything else.
+        shell: bash
+        env:
+          REPO: ghcr.io/${{ github.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && args+=(-t "$tag")
+          done <<< "$TAGS"
+          docker buildx imagetools create "${args[@]}" "${REPO}@${DIGEST}"
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            got="$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}')"
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$tag resolves to $got, not the scanned digest $DIGEST"
+              exit 1
+            fi
+            echo "$tag -> $got"
+          done <<< "$TAGS"
 
       - name: Sign image with cosign
         env:

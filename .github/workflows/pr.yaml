@@ -78,3 +78,23 @@ jobs:
         env:
           DOCKERFILE: ${{ matrix.dockerfile }}
         run: docker build -f "$DOCKERFILE" .
+
+  # Every image the prod chart deploys and the compose.yaml PostgreSQL, scanned
+  # with Trivy: fails on a HIGH or CRITICAL with a fix available. A local copy
+  # of the shared workflow (see trivy-image-scan.yaml), on ubuntu-latest because
+  # this repository is public.
+  image-scan:
+    name: Image scan
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/trivy-image-scan.yaml
+    with:
+      chart-path: chart
+      # The always-on public game (chart/values/mgmt/prod.yaml) is the only
+      # deployed render. The managed-database sample chart is not listed: its
+      # images are empty values the reader builds and pushes.
+      values-files: |
+        chart/values/mgmt/prod.yaml
+      manifests: |
+        compose.yaml
