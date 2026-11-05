@@ -24,6 +24,7 @@ the design and verification scope.
 * [Autoscaling](#autoscaling)
 * [Repo layout](#repo-layout)
 * [Local development](#local-development)
+* [Image scanning](#image-scanning)
 
 <!-- Regenerate with "pre-commit run -a markdown-toc" -->
 
@@ -290,3 +291,13 @@ Open `http://localhost:3000`. Frontend dependencies are installed automatically;
 Ctrl+C stops both servers. Run `make test`, `make web-test`, `make web-build`
 and `make helm-lint` for the core checks. `make gosec` and `make govulncheck`
 run the Go security checks.
+
+## Image scanning
+
+Every pull request scans the images the chart deploys with Trivy and fails on
+any HIGH or CRITICAL vulnerability that has a fix. Images used only on your
+machine or as CI service containers, such as the local PostgreSQL in
+`compose.yaml` and the kind node image, are not deployed. They are listed with
+the reason in [`security/dev-only-images.yaml`](security/dev-only-images.yaml)
+and scanned weekly by the non-blocking `Dev image report` workflow, which
+publishes its findings without failing.

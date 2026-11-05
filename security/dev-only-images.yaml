@@ -1,0 +1,28 @@
+# Images used only for local development and as CI service containers.
+#
+# None of these is deployed: the chart (chart/values/mgmt/prod.yaml) is the only
+# thing that runs in a cluster, and its images are scanned on every PR by the
+# blocking Image scan job (pr.yaml). The images below are left out of that scan
+# and scanned weekly by dev-image-report.yaml instead, which publishes the
+# findings and never fails on them. An image moves back to the blocking scan the
+# moment anything deployed uses it.
+#
+# Every entry is reviewed. Keep `usedIn` exact: the weekly report warns when a
+# listed file no longer contains the image reference.
+
+- image: "postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336"
+  usedIn:
+    - compose.yaml
+    - .github/workflows/gates.yaml
+    - scripts/kind.mjs
+    - samples/managed-database/scripts/local-smoke.sh
+  reason: "Local PostgreSQL for docker compose, make kind-dev and the sample's local smoke test, and the CI service container for the Go tests; never deployed (Kupe runs the managed database)."
+  reviewedBy: "bwalker"
+  reviewedOn: "2026-11-05"
+
+- image: "kindest/node:v1.35.0"
+  usedIn:
+    - scripts/kind.mjs
+  reason: "Node image for the throwaway local kind cluster that make kind-dev creates; never deployed."
+  reviewedBy: "bwalker"
+  reviewedOn: "2026-11-05"
