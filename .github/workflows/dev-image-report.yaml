@@ -1,0 +1,182 @@
+name: Dev image report
+
+# Weekly, NON-BLOCKING Trivy report on the images used only for local
+# development and as CI service containers (security/dev-only-images.yaml).
+# They are left out of the blocking PR Image scan (pr.yaml), which covers what
+# the chart deploys. This job publishes every HIGH and CRITICAL finding (fixed
+# or not) to the run summary and a report artifact, and does not fail on them:
+# it fails only when it cannot produce the report (a tool download, the list,
+# a stale DB or a scan error).
+#
+# The scan matches trivy-image-scan.yaml (Trivy version and checksum, a fresh
+# DB under 24 h old, --image-src remote, linux/amd64, --severity HIGH,CRITICAL,
+# fixable when Trivy's Status is "fixed"). That shared workflow has no
+# report-only mode or exclude list at github-workflows v2.14.0, so this is a
+# separate job; kupecloud/github-workflows#27 tracks adding them. Change
+# TRIVY_VERSION and TRIVY_SHA256 together with trivy-image-scan.yaml's.
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+  # Report (never block) on a PR that changes the list or this workflow.
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "security/dev-only-images.yaml"
+      - ".github/workflows/dev-image-report.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Dev image report
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LIST: security/dev-only-images.yaml
+      PLATFORM: linux/amd64
+      YQ_VERSION: v4.52.5
+      YQ_SHA256: 75d893a0d5940d1019cb7cdc60001d9e876623852c31cfc6267047bc31149fa9
+      TRIVY_VERSION: v0.76.1
+      TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install yq and trivy
+        # Each download is checked against its release's published SHA-256
+        # before it is unpacked or run.
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bin"
+          dl="$(mktemp -d -p "$RUNNER_TEMP")"
+          mkdir -p "$bin"
+          fetch() {
+            local url="$1" want="$2" file="$3" got
+            curl -fsSLo "$file" "$url"
+            got="$(sha256sum < "$file")"
+            got="${got%% *}"
+            if [ "$got" != "$want" ]; then
+              echo "::error::sha256 mismatch for $url: expected $want, got $got"
+              exit 1
+            fi
+          }
+          fetch "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" "$YQ_SHA256" "$dl/yq"
+          install -m 0755 "$dl/yq" "$bin/yq"
+          fetch "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz" \
+            "$TRIVY_SHA256" "$dl/trivy.tar.gz"
+          tar -xzf "$dl/trivy.tar.gz" -C "$dl" trivy
+          install -m 0755 "$dl/trivy" "$bin/trivy"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Read the list
+        # Every entry needs image, usedIn, reason, reviewedBy and reviewedOn.
+        # A listed file that no longer contains the image is a warning: the
+        # list has drifted from the repository.
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/dev-images"
+          mkdir -p "$out"
+          yq -o=json '.' "$LIST" > "$out/list.json"
+          bad="$(jq -r 'if type != "array" then "the list must be a YAML sequence" else
+            (to_entries[] | .key as $i | .value
+              | (["image", "usedIn", "reason", "reviewedBy", "reviewedOn"] - keys)[]
+              | "entry \($i): missing \(.)") end' "$out/list.json")"
+          if [ -n "$bad" ]; then
+            while IFS= read -r line; do echo "::error file=$LIST::$line"; done <<< "$bad"
+            exit 1
+          fi
+          jq -r '.[] | .image as $i | .usedIn[] | [$i, .] | @tsv' "$out/list.json" |
+            while IFS=$'\t' read -r image file; do
+              if ! grep -qF -- "${image}" "$file"; then
+                echo "::warning file=$LIST::$file does not contain $image; update the list."
+              fi
+            done
+          jq -r '.[].image' "$out/list.json" | sort -u > "$out/images.txt"
+          echo "Images:"
+          cat "$out/images.txt"
+
+      - name: Download vulnerability DB
+        # Fresh per job; a DB older than 24 h is refused, as in the PR scan.
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/dev-images"
+          cache="$RUNNER_TEMP/trivy-cache"
+          trivy image --cache-dir "$cache" --download-db-only --no-progress
+          trivy version --cache-dir "$cache" --format json > "$out/trivy-version.json"
+          age="$(jq -r '.VulnerabilityDB.UpdatedAt | sub("\\.[0-9]+"; "") | now - fromdateiso8601 | floor' \
+            "$out/trivy-version.json")"
+          echo "Trivy vulnerability DB is $((age / 3600)) h old"
+          if [ "$age" -gt 86400 ]; then
+            echo "::error::Trivy vulnerability DB is $((age / 3600)) h old; refusing to report from a stale DB."
+            exit 1
+          fi
+
+      - name: Scan and report
+        # Findings never fail this step; a scan that cannot run does.
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/dev-images"
+          cache="$RUNNER_TEMP/trivy-cache"
+          reports="$out/reports"
+          mkdir -p "$reports"
+          # shellcheck disable=SC2054 # HIGH,CRITICAL is one comma-separated flag value
+          common=(--cache-dir "$cache" --skip-db-update --image-src remote
+            --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL
+            --no-progress --timeout 15m)
+          errors=0
+          {
+            echo "### Dev-only image report (non-blocking)"
+            echo ""
+            echo "Images from \`$LIST\`, scanned for \`$PLATFORM\` with Trivy $TRIVY_VERSION. Reported only; nothing here fails the run or a PR."
+            echo ""
+            echo "| Image | Fixable HIGH/CRITICAL | Of which CRITICAL | Unfixed HIGH/CRITICAL |"
+            echo "| --- | --- | --- | --- |"
+          } > "$out/summary.md"
+          while IFS= read -r image; do
+            slug="$(printf '%s' "$image" | tr -c 'A-Za-z0-9._-' '_')"
+            raw="$out/$slug.trivy.json"
+            echo "::group::$image"
+            if ! trivy image "${common[@]}" --format json --output "$raw" "$image" ||
+              ! jq -e '.SchemaVersion == 2' "$raw" > /dev/null; then
+              echo "::error::Trivy could not scan $image"
+              errors=$((errors + 1))
+              echo "| \`$image\` | scan error | | |" >> "$out/summary.md"
+              echo "::endgroup::"
+              continue
+            fi
+            jq 'del(.Metadata.ImageConfig, (.. | objects | select(has("CreatedBy")) | .CreatedBy))' \
+              "$raw" > "$reports/$slug.json"
+            rm -f "$raw"
+            jq -r --arg image "$image" '
+              [(.Results // [])[] | .Target as $t | (.Vulnerabilities // [])[]
+                | {k: [.VulnerabilityID, .PkgName, .InstalledVersion, $t], sev: .Severity,
+                   fixable: ((.Status // "") == "fixed")}] | unique_by(.k) as $f
+              | "| `\($image)` | \($f | map(select(.fixable)) | length) | \($f | map(select(.fixable and .sev == "CRITICAL")) | length) | \($f | map(select(.fixable | not)) | length) |"' \
+              "$reports/$slug.json" >> "$out/summary.md"
+            echo "::endgroup::"
+          done < "$out/images.txt"
+          cp "$out/summary.md" "$reports/summary.md"
+          cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$out/summary.md"
+          [ "$errors" -eq 0 ]
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dev-image-report
+          path: ${{ runner.temp }}/dev-images/reports/
+          if-no-files-found: ignore
+          retention-days: 30

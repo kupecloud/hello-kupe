@@ -30,6 +30,7 @@ on:
       - "docs/**"
       - "local/**"
       - "compose.yaml"
+      - "security/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -79,10 +80,14 @@ jobs:
           DOCKERFILE: ${{ matrix.dockerfile }}
         run: docker build -f "$DOCKERFILE" .
 
-  # Every image the prod chart deploys and the compose.yaml PostgreSQL, scanned
-  # with Trivy: fails on a HIGH or CRITICAL with a fix available. A local copy
-  # of the shared workflow (see trivy-image-scan.yaml), on ubuntu-latest because
-  # this repository is public.
+  # Every image the prod chart deploys, scanned with Trivy: fails on a HIGH or
+  # CRITICAL with a fix available. A local copy of the shared workflow (see
+  # trivy-image-scan.yaml), on ubuntu-latest because this repository is public.
+  # Images used only for local development and as CI service containers
+  # (compose.yaml, the gates.yaml service container, scripts/kind.mjs, the
+  # sample's local-smoke.sh) are not deployed: they are listed, with reasons,
+  # in security/dev-only-images.yaml and reported weekly, non-blocking, by
+  # dev-image-report.yaml.
   image-scan:
     name: Image scan
     permissions:
@@ -96,5 +101,3 @@ jobs:
       # images are empty values the reader builds and pushes.
       values-files: |
         chart/values/mgmt/prod.yaml
-      manifests: |
-        compose.yaml
