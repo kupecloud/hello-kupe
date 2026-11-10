@@ -22,10 +22,7 @@ The ArgoCD repo owns this Application through `coreServices.charts`, scoped
 only to `mgmt` destinations. Its management gateway values also allow the
 `hello-kupe` namespace. Run the ArgoCD repo's normal production upgrade after
 reviewing its local changes. The game chart itself creates no cluster, registry
-or database, and grants no access: kupe-runner's release harness reads the Trivy
-`vulnerabilityreports` in `hello-kupe` through cluster-base's prod profile
-(`runnerAccess.onbMission.vulnerabilityReportNamespaces`, cluster-base#63), not
-through this chart (hello-kupe#29).
+or database, and grants no access.
 
 The chart permits only `/`, `/api`, `/_next/static`, and `/kupe-mark.svg` on its
 public route. Health, readiness and metrics endpoints stay internal.
