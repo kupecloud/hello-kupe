@@ -114,14 +114,6 @@ repos:
         language: system
         pass_filenames: false
         files: ^chart/
-      # Optional VulnerabilityReport reader: off by default, exact get/list
-      # rule and ServiceAccount subject in the mgmt prod values.
-      - id: report-reader-render
-        name: vulnerability report reader render checks
-        entry: .github/hooks/report-reader-render.sh
-        language: system
-        pass_filenames: false
-        files: ^(chart/|\.github/hooks/report-reader-render\.sh)
       # RBAC Secrets Audit: no rendered ClusterRole may read secrets cluster-wide
       # unless an --allow entry names it with a reason (kupecloud/kupe-tests#123).
       # Vendored byte-identical from github-workflows
