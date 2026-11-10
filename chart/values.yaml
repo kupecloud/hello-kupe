@@ -68,14 +68,6 @@ podAnnotations:
   # metrics.portNumber is rendered from service.port in the deployment
   # template so it can't drift from the container port.
 
-# Optional read-only access to this namespace's Trivy VulnerabilityReports for
-# a release-verification ServiceAccount (get/list only). Off by default.
-vulnerabilityReportReader:
-  enabled: false
-  serviceAccount:
-    name: ""
-    namespace: ""
-
 # Without a database, the game runs in temporary, single-replica practice mode.
 # infra/ creates these Secrets in the app and migration namespaces.
 database:
