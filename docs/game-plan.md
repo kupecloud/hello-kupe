@@ -29,6 +29,6 @@ accounts or bot prevention. No synthetic logs or seeded leaderboard entries.
   leaderboard refresh and session recovery after reload; hint dialog and Escape.
 - Responsive mobile and desktop layouts, reduced-motion styles and keyboard controls.
 - Helm rendering with and without database bindings; infrastructure schema validation.
-- Container build with Go 1.26.10; Go lint, security analysis and vulnerability scan.
+- Container build with Go 1.26.11; Go lint, security analysis and vulnerability scan.
 
 Cloud infrastructure has not been applied and the new image has not been published.
