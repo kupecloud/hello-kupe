@@ -7,11 +7,21 @@ on:
         description: Unique image tag (for example demo-20261026). Does not create a release.
         required: true
         type: string
+      digest:
+        description: Existing untagged GHCR digest to scan, tag and sign. Empty builds a new image.
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       version:
         description: Semantic release version without the leading v
         required: true
+        type: string
+      digest:
+        description: Existing untagged GHCR digest to scan, tag and sign. Empty builds a new image.
+        required: false
+        default: ""
         type: string
     outputs:
       digest:
@@ -29,3 +39,4 @@ jobs:
     with:
       runs-on: ubuntu-latest
       version: ${{ inputs.version }}
+      digest: ${{ inputs.digest }}

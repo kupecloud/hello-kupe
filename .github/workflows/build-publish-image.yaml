@@ -1,5 +1,8 @@
 name: Publish Image
 
+# Keep these publisher steps in sync with kupecloud/github-workflows v2.22.0
+# (c76a504fed38068e226d1291bbcf3b002f23092b).
+
 on:
   workflow_call:
     inputs:
@@ -13,6 +16,21 @@ on:
         description: Semantic release version without the leading v
         required: true
         type: string
+      digest:
+        description: >-
+          Existing manifest digest in this repository's GHCR package to scan,
+          promote and sign. Empty builds a new image. A reused digest skips
+          build setup and requires the runner's Docker Buildx CLI plugin.
+        required: false
+        type: string
+        default: ""
+      baseline-file:
+        description: >-
+          Reviewed image baselines in the caller commit. An absent file covers
+          nothing; malformed or expired entries fail the publish.
+        required: false
+        type: string
+        default: security/image-baselines.yaml
       platforms:
         description: Target platforms for Docker buildx
         required: false
@@ -36,7 +54,7 @@ on:
       scan-platform:
         description: >-
           Platform of the pushed image that Trivy scans before any tag is
-          applied (the prod node platform). Must be one of platforms.
+          applied (the prod node platform). Must be present in the image.
         required: false
         type: string
         default: linux/amd64
@@ -72,17 +90,88 @@ jobs:
     name: Build, Push & Sign
     runs-on: ${{ inputs.runs-on }}
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.sign.outputs.digest }}
     steps:
+      - name: Validate existing digest input
+        if: inputs.digest != ''
+        shell: bash
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest must be sha256: followed by 64 lowercase hex characters."
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read reviewed baseline
+        id: baseline
+        shell: bash
+        env:
+          BASELINE_FILE: ${{ inputs.baseline-file }}
+          CALLER_SHA: ${{ github.sha }}
+          # Update yq version and checksum together, as in trivy-image-scan.
+          YQ_VERSION: v4.52.5
+          YQ_SHA256: 75d893a0d5940d1019cb7cdc60001d9e876623852c31cfc6267047bc31149fa9
+        run: |
+          set -euo pipefail
+          if [ -z "$BASELINE_FILE" ]; then
+            exit 0
+          fi
+          # Read the committed blob so symlinks, generated files and workspace
+          # changes cannot supply the reviewed baseline.
+          if [[ "$BASELINE_FILE" == /* || "/$BASELINE_FILE/" == */../* || "/$BASELINE_FILE/" == */./* ||
+                "$BASELINE_FILE" == *$'\n'* || "$BASELINE_FILE" == *$'\r'* ]]; then
+            echo "::error::baseline-file must be a repository-relative path."
+            exit 1
+          fi
+          entry="$(git --literal-pathspecs ls-tree --full-tree "$CALLER_SHA" -- "$BASELINE_FILE")"
+          if [ -z "$entry" ]; then
+            exit 0
+          fi
+          mode="${entry%% *}"
+          if [[ "$mode" != 100644 && "$mode" != 100755 ]]; then
+            echo "::error::baseline-file must be a regular committed file."
+            exit 1
+          fi
+          dl="$(mktemp -d "$RUNNER_TEMP/trivy-baseline.XXXXXXXXXX")"
+          git show "$CALLER_SHA:$BASELINE_FILE" > "$dl/baseline.yaml"
+
+          # Match the checksum-pinned YAML parser used by trivy-image-scan.
+          url="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          curl -fsSLo "$dl/yq" "$url"
+          got="$(sha256sum < "$dl/yq")"
+          if [ "${got%% *}" != "$YQ_SHA256" ]; then
+            echo "::error::yq checksum mismatch."
+            exit 1
+          fi
+          chmod 0755 "$dl/yq"
+          duplicates="$("$dl/yq" '[.. | select(kind == "map") | keys | select(length != (unique | length))] | length' "$dl/baseline.yaml")"
+          if [ "$duplicates" != 0 ]; then
+            echo "::error::The baseline file must be one YAML document with unique mapping keys."
+            exit 1
+          fi
+          "$dl/yq" -o=json '.' "$dl/baseline.yaml" > "$dl/baseline.json"
+          echo "file=$dl/baseline.json" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
         with:
+          # Pin the cosign BINARY, not just the action.
+          #
+          # cosign-installer bakes its default cosign version into each action
+          # release (v4.1.1 defaults to v3.0.5), so bumping the action silently
+          # changes the tool's MAJOR version — and cosign v3 flipped the
+          # defaults of both flags the sign step below depends on. Declaring the
+          # version here makes that a reviewable input instead of a side effect,
+          # and lets renovate track the two independently.
           cosign-release: v3.0.5
 
       - name: Set up Docker Buildx
+        if: inputs.digest == ''
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Log in to GHCR
@@ -99,11 +188,12 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,enable=${{ inputs.digest == '' }}
             type=raw,value=${{ inputs.version }}
             type=raw,value=v${{ inputs.version }}
 
       - name: Build and push image by digest
+        if: inputs.digest == ''
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
@@ -116,6 +206,29 @@ jobs:
           # `main` tag until the scan below passes and "Promote tags" runs. A
           # failed scan leaves an untagged manifest that cleanup-ghcr prunes.
           outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Select image digest
+        id: image
+        shell: bash
+        env:
+          REPO: ghcr.io/${{ github.repository }}
+          EXISTING_DIGEST: ${{ inputs.digest }}
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          digest="${EXISTING_DIGEST:-$BUILT_DIGEST}"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Missing or invalid manifest digest."
+            exit 1
+          fi
+          if [ -n "$EXISTING_DIGEST" ]; then
+            if ! got="$(docker buildx imagetools inspect "$REPO@$digest" --format '{{.Manifest.Digest}}')" ||
+               [ "$got" != "$digest" ]; then
+              echo "::error::The requested digest could not be verified in $REPO."
+              exit 1
+            fi
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Install trivy
         # The download is checked against the SHA-256 its upstream release
@@ -147,33 +260,79 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
 
       - name: Scan image
-        # Policy: fail on any HIGH or CRITICAL vulnerability with a fix
-        # available; HIGH and CRITICAL with no fix are reported only. The
-        # vulnerability DB is downloaded fresh into this job's own cache
-        # directory (never a stale runner cache) and must be under 24 h old.
-        # Trivy reads the GHCR login above from the Docker config.
+        id: scan
+        # The gate and artifact come from one fresh Trivy report. A reviewed
+        # baseline can cover only an exact fixable HIGH on this repository,
+        # digest and platform. CRITICAL is never baselined.
         shell: bash
         env:
-          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
           PLATFORM: ${{ inputs.scan-platform }}
+          BASELINES_JSON: ${{ steps.baseline.outputs.file }}
+          SCAN_REASON: ${{ inputs.digest != '' && 'existing digest' || 'new build' }}
         run: |
           set -euo pipefail
+          if ! command -v jq > /dev/null; then
+            echo "::error::jq is required on the runner (ubuntu-latest and the kupe runner image ship it)."
+            exit 1
+          fi
+          digest="${IMAGE##*@}"
+          repo="${IMAGE%@*}"
           cache="$RUNNER_TEMP/trivy-cache"
           reports="$RUNNER_TEMP/trivy-reports"
           rm -rf "$cache" "$reports"
           mkdir -p "$reports"
-          trivy image --cache-dir "$cache" --download-db-only --no-progress
-          version="$(trivy version --cache-dir "$cache" --format json)"
-          # The first UpdatedAt in the output is the vulnerability DB's.
-          if ! [[ "$version" =~ \"UpdatedAt\":\"([0-9T:-]+) ]]; then
-            echo "::error::Could not read the Trivy vulnerability DB date: $version"
-            exit 1
+          # Run outside the caller's checkout so local Trivy config and ignore
+          # files cannot filter findings before the baseline gate sees them.
+          work="$(mktemp -d "$RUNNER_TEMP/trivy-scan.XXXXXXXXXX")"
+          trap 'rm -rf -- "$work"' EXIT
+          cd "$work"
+
+          baselines="$work/baselines.json"
+          if [ -z "${BASELINES_JSON:-}" ]; then
+            echo '[]' > "$baselines"
+          else
+            today="$(date -u +%Y-%m-%d)"
+            if ! jq -e -s --arg today "$today" '
+              def str: type == "string" and test("\\S");
+              def date_ok: type == "string" and test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}\\z")
+                and (. as $date | try (strptime("%Y-%m-%d") | mktime | strftime("%Y-%m-%d") == $date) catch false);
+              def days: strptime("%Y-%m-%d") | mktime / 86400;
+              def fields($required; $optional):
+                type == "object" and (($required - keys) | length == 0)
+                and ((keys - ($required + $optional)) | length == 0);
+              def finding: fields(["id", "package", "installedVersion", "target"]; []) and all(.[]; str);
+              def entry:
+                fields(["image", "digest", "platforms", "findings", "reviewedBy", "reviewedOn", "expires", "reason"];
+                       ["signerIdentity", "signerWorkflowSha"])
+                and (.image | type == "string" and test("\\A[a-z0-9._-]+(:[0-9]+)?(/[a-z0-9._-]+)+\\z"))
+                and (.digest | type == "string" and test("\\Asha256:[a-f0-9]{64}\\z"))
+                and (.platforms | type == "array" and length > 0 and length == (unique | length)
+                     and all(.[]; type == "string" and test("\\A[a-z0-9]+/[a-z0-9]+(/[a-z0-9]+)?\\z")))
+                and (.findings | type == "array" and length > 0 and length == (unique | length) and all(.[]; finding))
+                and (.reviewedBy | str) and (.reason | str)
+                and (if has("signerIdentity") then (.signerIdentity | str) else true end)
+                and (if has("signerWorkflowSha") then (.signerWorkflowSha | str) else true end)
+                and (.reviewedOn | date_ok) and (.expires | date_ok)
+                and .reviewedOn <= $today and .expires >= $today and .expires >= .reviewedOn
+                and ((.expires | days) - (.reviewedOn | days) <= 90);
+              if length == 1 and (.[0] | type == "array" and length > 0 and all(.[]; entry)
+                and (group_by([.image, .digest]) | all(.[]; length == 1)))
+              then .[0] else error("invalid, duplicate or expired baseline") end' "$BASELINES_JSON" > "$baselines"; then
+              echo "::error::The reviewed baseline file is malformed or expired; no tag was applied."
+              exit 1
+            fi
           fi
-          updated="${BASH_REMATCH[1]}"
-          age=$(( $(date -u +%s) - $(date -u -d "${updated}Z" +%s) ))
-          echo "Trivy vulnerability DB updated ${updated}Z ($((age / 3600)) h ago)"
+
+          trivy image --cache-dir "$cache" --download-db-only --no-progress
+          trivy version --cache-dir "$cache" --format json > "$work/trivy-version.json"
+          updated="$(jq -er '.VulnerabilityDB.UpdatedAt' "$work/trivy-version.json")"
+          # UpdatedAt is RFC 3339 with nanoseconds; whole seconds are enough.
+          age="$(jq -er '.VulnerabilityDB.UpdatedAt | sub("\\.[0-9]+"; "") | now - fromdateiso8601 | floor' \
+            "$work/trivy-version.json")"
+          echo "Trivy vulnerability DB updated $updated ($((age / 3600)) h ago)"
           if [ "$age" -gt 86400 ]; then
-            echo "::error::Trivy vulnerability DB is $((age / 3600)) h old; refusing to scan with a stale DB."
+            echo "::error::Trivy vulnerability DB is $((age / 3600)) h old (updated $updated); refusing to scan with a stale DB."
             exit 1
           fi
 
@@ -181,43 +340,131 @@ jobs:
           common=(--cache-dir "$cache" --skip-db-update --image-src remote
             --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL
             --no-progress --timeout 15m)
-          # Report: every HIGH and CRITICAL finding, fixed or not.
-          trivy image "${common[@]}" --format json --output "$reports/image.json" "$IMAGE"
-          trivy convert --format sarif --output "$reports/image.sarif" "$reports/image.json"
-          # Gate: the policy, verbatim.
-          rc=0
-          trivy image "${common[@]}" --ignore-unfixed --exit-code 1 "$IMAGE" | tee "$reports/gate.txt" || rc=$?
-          {
-            echo "### Trivy image scan"
-            echo ""
-            echo "\`$IMAGE\` for \`$PLATFORM\`: fail on HIGH/CRITICAL with a fix available."
-            echo ""
-            echo '```'
-            cat "$reports/gate.txt"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::$IMAGE has a fixable HIGH or CRITICAL vulnerability (or could not be scanned); no tag was applied. Update the base image or dependency and release again."
+          raw="$work/trivy-image.json"
+          report="$work/report.json"
+          scan_error=false
+          if ! trivy image "${common[@]}" --format json --output "$raw" "$IMAGE"; then
+            echo "::error::Trivy could not scan $IMAGE for $PLATFORM; no tag was applied."
+            scan_error=true
+          elif ! jq -es --arg platform "$PLATFORM" '
+            ($platform | split("/")) as $p
+            | length == 1 and (.[0] | .SchemaVersion == 2
+                and (.Results == null or (.Results | type) == "array")
+                and all((.Results // [])[]; type == "object"
+                  and (.Vulnerabilities == null or (.Vulnerabilities | type) == "array")
+                  and all((.Vulnerabilities // [])[]; type == "object"))
+                and (.Metadata.ImageConfig | .os == $p[0] and .architecture == $p[1]
+                     and ($p[2] == null or .variant == $p[2])))' "$raw" > /dev/null; then
+            echo "::error::Trivy did not report schema 2 results for $IMAGE on $PLATFORM; no tag was applied."
+            scan_error=true
+          fi
+          if [ "$scan_error" = false ]; then
+            jq 'del(.Metadata.ImageConfig, (.. | objects | select(has("CreatedBy")) | .CreatedBy))' "$raw" > "$report"
+            cp "$report" "$reports/image.json"
+            trivy convert --format sarif --output "$reports/image.sarif" "$reports/image.json"
+          else
+            echo '{}' > "$report"
+          fi
+
+          # The report matches the schema used by trivy-image-scan. Its one
+          # image is always from a full, enforcing scan.
+          # shellcheck disable=SC2016
+          jq -n --slurpfile report "$report" --slurpfile baselines "$baselines" \
+            --slurpfile version "$work/trivy-version.json" --arg ref "$IMAGE" --arg repo "$repo" \
+            --arg digest "$digest" --arg platform "$PLATFORM" --argjson scan_error "$scan_error" \
+            --arg reason "${SCAN_REASON:-new build}" '
+            def key: [.id, .package, .installedVersion, .target];
+            def rows: [(.Results // [])[] | .Target as $target | (.Vulnerabilities // [])[]
+              | {id: .VulnerabilityID, package: .PkgName, installedVersion: .InstalledVersion,
+                 fixedVersion: (.FixedVersion // ""), status: (.Status // ""), severity: .Severity, target: $target,
+                 fixable: (.Status == "fixed")}];
+            ([$baselines[0][] | select(.image == $repo and .digest == $digest
+                and (.platforms | index($platform) != null))][0]) as $entry
+            | [($entry.findings // [])[] | key] as $keys
+            | ($report[0] | rows | group_by([key, .severity]) | map((map(select(.fixable)) + .)[0]
+                | key as $k | . + {baselined: (.fixable and .severity == "HIGH" and ($keys | index([$k]) != null))})) as $findings
+            | ($findings | map(key)) as $seen
+            | ($findings | map(select(.fixable and (.baselined | not))) | length) as $blocking
+            | {schemaVersion: 3,
+               status: (if $scan_error or $blocking > 0 then "fail" else "pass" end),
+               reportOnly: false, platform: $platform,
+               policy: {severities: ["HIGH", "CRITICAL"], ignoreUnfixed: true,
+                        fails: "any HIGH or CRITICAL finding with a fix available that no reviewed baseline covers (a CRITICAL is never baselined)"},
+               trivy: ($version[0] | {version: .Version, vulnerabilityDB: {updatedAt: .VulnerabilityDB.UpdatedAt}}),
+               scan: {mode: "full", reason: $reason, base: null},
+               images: [{reference: $ref, repository: $repo, digest: $digest, platform: $platform,
+                         scanReason: $reason,
+                         status: (if $scan_error then "error" elif $blocking > 0 then "fail" else "pass" end),
+                         counts: {fixable: ($findings | map(select(.fixable)) | length),
+                                  unfixed: ($findings | map(select(.fixable | not)) | length),
+                                  baselined: ($findings | map(select(.baselined)) | length)},
+                         findings: $findings,
+                         baseline: (if $entry == null then null else
+                           ($entry | {reviewedBy, reviewedOn, expires, reason,
+                                      notFound: [if $scan_error then empty else .findings[]
+                                                | select(key as $k | $seen | index([$k]) == null) end],
+                                      criticalNotBaselined: [$findings[] | select(.severity == "CRITICAL" and .fixable)
+                                                            | select(key as $k | $keys | index([$k]) != null)]}) end)}],
+               skipped: [], excluded: [], removed: []}' > "$reports/results.json"
+          if [ "$scan_error" = true ]; then
             exit 1
           fi
 
+          jq -r '[.images[0].findings[]
+              | [(if .baselined then "baselined" elif .fixable then "fixable" else "unfixed" end),
+                 .severity, .id, .package, .installedVersion, .fixedVersion, .target]]
+            | sort_by(.[0] == "unfixed") | .[] | @tsv' "$reports/results.json" > "$reports/findings.tsv"
+          blocking="$(jq '[.images[0].findings[] | select(.fixable and (.baselined | not))] | length' "$reports/results.json")"
+          {
+            echo "### Trivy image scan"
+            echo ""
+            jq -r '.images[0] | "`\(.reference)` for `\(.platform)`: \(.counts.fixable) fixable, \(.counts.unfixed) unfixed (reported only), \(.counts.baselined) baselined."' \
+              "$reports/results.json"
+            jq -r '.images[0].baseline | select(. != null)
+              | "Baseline reviewed by \(.reviewedBy) on \(.reviewedOn), expires \(.expires)."' "$reports/results.json"
+            if [ -s "$reports/findings.tsv" ]; then
+              echo ""
+              echo "| Fix | Severity | ID | Package | Installed | Fixed in | Target |"
+              echo "| --- | --- | --- | --- | --- | --- | --- |"
+              jq -r '.images[0].findings[] | "| \(if .baselined then "baselined" elif .fixable then "fixable" else "unfixed" end) | \(.severity) | \(.id) | `\(.package)` | \(.installedVersion) | \(.fixedVersion) | `\(.target)` |"' \
+                "$reports/results.json"
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if jq -e '.images[0].baseline.notFound | length > 0' "$reports/results.json" > /dev/null; then
+            echo "::warning::The reviewed baseline lists findings no longer reported by the scan."
+          fi
+          if jq -e '.images[0].baseline.criticalNotBaselined | length > 0' "$reports/results.json" > /dev/null; then
+            echo "::error::The reviewed baseline lists CRITICAL findings, which can never be baselined."
+          fi
+          if [ "$blocking" -ne 0 ]; then
+            echo "::error::$IMAGE has $blocking fixable HIGH or CRITICAL vulnerability(ies); no tag was applied. See the scan report for findings outside the reviewed baseline."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
       - name: Upload scan report
-        if: always() && hashFiles(format('{0}/trivy-reports/*', runner.temp)) != ''
+        # hashFiles() only sees GITHUB_WORKSPACE, so it cannot test for these
+        # files under RUNNER_TEMP; a failure before the scan wrote nothing is
+        # handled by if-no-files-found instead.
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: trivy-image-scan
           path: ${{ runner.temp }}/trivy-reports/
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: Promote tags
-        # Points every tag at the scanned digest. imagetools create with one
-        # source copies its manifest unchanged, so each tag resolves to exactly
-        # the digest that was scanned and is signed below; the check refuses
-        # anything else.
+        # Points every tag at the scanned digest. With one source and
+        # --prefer-index=false, imagetools create copies the source manifest
+        # unchanged (an index stays that index; a single manifest is not
+        # wrapped in a new index with a new digest), so each tag resolves to
+        # exactly the digest that was scanned and is signed below; the check
+        # refuses anything else.
         shell: bash
         env:
           REPO: ghcr.io/${{ github.repository }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.scan.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
@@ -225,7 +472,7 @@ jobs:
           while IFS= read -r tag; do
             [ -n "$tag" ] && args+=(-t "$tag")
           done <<< "$TAGS"
-          docker buildx imagetools create "${args[@]}" "${REPO}@${DIGEST}"
+          docker buildx imagetools create --prefer-index=false "${args[@]}" "${REPO}@${DIGEST}"
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
             got="$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}')"
@@ -237,8 +484,36 @@ jobs:
           done <<< "$TAGS"
 
       - name: Sign image with cosign
+        id: sign
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.scan.outputs.digest }}
         run: |
+          set -euo pipefail
+          # --new-bundle-format=false: sign with the legacy tag-based .sig
+          # format, NOT the sigstore bundle. GHCR does not serve the OCI
+          # referrers API (404 MANIFEST_UNKNOWN even when the fallback tag
+          # exists — verified live 2026-08-21) and kyverno's SigstoreBundle
+          # discovery has no tag fallback, so bundle-signed images are
+          # unverifiable by the platform policy. Legacy .sig is what
+          # verify-platform-images (type: Cosign) verifies. Revisit when
+          # kyverno's GHCR bundle discovery works end-to-end.
+          #
+          # BOTH flags are required, and passing only the first is a hard error
+          # on cosign v3:
+          #
+          #   must provide --new-bundle-format or --bundle where applicable
+          #   with --signing-config or --use-signing-config
+          #
+          # cosign v3 defaults BOTH --new-bundle-format and --use-signing-config
+          # to true, and the latter refuses to run without the former, so the
+          # legacy format needs the signing-config opt-out as well. Both flags
+          # also exist on cosign v2 (where both already default to false), so
+          # this command is correct on either major — which is what makes a
+          # future cosign bump safe rather than silently format-changing.
+          #
+          # Do not "simplify" this back to a bare `cosign sign --yes`: on
+          # cosign v3 that SUCCEEDS and emits a new-format bundle, so CI stays
+          # green while the platform policy can no longer verify the image.
           cosign sign --yes --new-bundle-format=false --use-signing-config=false \
             "ghcr.io/${{ github.repository }}@${DIGEST}"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
