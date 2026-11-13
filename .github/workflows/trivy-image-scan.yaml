@@ -1,7 +1,7 @@
 name: Trivy Image Scan
 
-# Public copy of kupecloud/github-workflows v2.21.0
-# (e66d6cdaebc97dbb188c2926073c81baa34379bc). A public repository cannot
+# Public copy of kupecloud/github-workflows full-scan proof
+# (8c18e0565d328f5c8f373bfb8bea6cd730b4b5a6). A public repository cannot
 # call the private reusable workflow. Keep this file in sync with upstream.
 
 # Scans container images a repository deploys, first-party and third-party,
@@ -788,6 +788,7 @@ jobs:
             exit 1
           fi
 
+      # Actions can evaluate env for skipped steps. Full mode has no base inputs.
       - name: Render base chart
         id: base-render
         if: steps.mode.outputs.mode == 'diff'
@@ -796,11 +797,11 @@ jobs:
         working-directory: ${{ steps.mode.outputs.base-dir }}
         env:
           SCAN_OUT: ${{ runner.temp }}/trivy-image-scan-base
-          ADOPTING: ${{ fromJSON(steps.base-inputs.outputs.config).adopting }}
-          RELEASE_NAME: ${{ fromJSON(steps.base-inputs.outputs.config).release-name }}
-          CHART_PATH: ${{ fromJSON(steps.base-inputs.outputs.config).chart-path }}
-          TEMPLATE_ARGS: ${{ fromJSON(steps.base-inputs.outputs.config).template-args }}
-          VALUES_FILES: ${{ fromJSON(steps.base-inputs.outputs.config).values-files }}
+          ADOPTING: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').adopting }}
+          RELEASE_NAME: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').release-name }}
+          CHART_PATH: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').chart-path }}
+          TEMPLATE_ARGS: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').template-args }}
+          VALUES_FILES: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').values-files }}
         run: *render-script
 
       - name: Extract base images
@@ -812,11 +813,11 @@ jobs:
         env:
           SCAN_OUT: ${{ runner.temp }}/trivy-image-scan-base
           ERROR_PREFIX: "${{ inputs.scan-mode == 'auto' && 'base (not annotated): ' || '::error::' }}"
-          ADOPTING: ${{ fromJSON(steps.base-inputs.outputs.config).adopting }}
-          MANIFESTS: ${{ fromJSON(steps.base-inputs.outputs.config).manifests }}
-          IMAGES: ${{ fromJSON(steps.base-inputs.outputs.config).images }}
-          EXCLUDE_FILE: ${{ fromJSON(steps.base-inputs.outputs.config).exclude-file }}
-          FROM_EXCLUDE_FILE: ${{ fromJSON(steps.base-inputs.outputs.config).images-from-exclude-file }}
+          ADOPTING: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').adopting }}
+          MANIFESTS: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').manifests }}
+          IMAGES: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').images }}
+          EXCLUDE_FILE: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').exclude-file }}
+          FROM_EXCLUDE_FILE: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').images-from-exclude-file }}
         run: *extract-script
 
       - name: Load baselines
