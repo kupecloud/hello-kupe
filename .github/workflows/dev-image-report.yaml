@@ -25,6 +25,9 @@ permissions:
 jobs:
   report:
     name: Dev image report
+    permissions:
+      contents: read
+      packages: read
     uses: ./.github/workflows/trivy-image-scan.yaml
     with:
       runs-on: ubuntu-latest
