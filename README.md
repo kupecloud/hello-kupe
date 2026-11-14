@@ -294,10 +294,14 @@ run the Go security checks.
 
 ## Image scanning
 
-Every pull request scans the images the chart deploys with Trivy and fails on
-any HIGH or CRITICAL vulnerability that has a fix. Images used only on your
-machine or as CI service containers, such as the local PostgreSQL in
-`compose.yaml` and the kind node image, are not deployed. They are listed with
-the reason in [`security/dev-only-images.yaml`](security/dev-only-images.yaml)
-and scanned weekly by the non-blocking `Dev image report` workflow, which
-publishes its findings without failing.
+The pull request `Image scan` uses Trivy to check changed images in the
+production chart. The [`Deployed image scan`](.github/workflows/deployed-image-scan.yaml)
+checks every image in that chart on Mondays at 06:11 UTC and can also run on
+demand. Both checks fail on fixable HIGH or CRITICAL vulnerabilities that lack
+a reviewed baseline. Baselines can cover exact HIGH findings.
+
+Images used for local development or CI, including PostgreSQL in
+`compose.yaml` and the kind node image, are listed with their reasons in
+[`security/dev-only-images.yaml`](security/dev-only-images.yaml). The weekly
+[`Dev image report`](.github/workflows/dev-image-report.yaml) publishes those
+findings without failing the run for vulnerabilities.

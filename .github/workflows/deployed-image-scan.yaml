@@ -1,0 +1,22 @@
+name: Deployed image scan
+
+on:
+  schedule:
+    - cron: "11 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image-scan:
+    name: Image scan
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/trivy-image-scan.yaml
+    with:
+      scan-mode: full
+      chart-path: chart
+      values-files: |
+        chart/values/mgmt/prod.yaml
