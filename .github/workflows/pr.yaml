@@ -80,9 +80,8 @@ jobs:
           DOCKERFILE: ${{ matrix.dockerfile }}
         run: docker build -f "$DOCKERFILE" .
 
-  # Every image the prod chart deploys, scanned with Trivy: fails on a HIGH or
-  # CRITICAL with a fix available. A local copy of the shared workflow (see
-  # trivy-image-scan.yaml), on ubuntu-latest because this repository is public.
+  # Scan each deployed image reference that changes in the PR. Use the local
+  # copy of the shared workflow on ubuntu-latest.
   # Images used only for local development and as CI service containers
   # (compose.yaml, the gates.yaml service container, scripts/kind.mjs, the
   # sample's local-smoke.sh) are not deployed: they are listed, with reasons,
@@ -95,6 +94,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/trivy-image-scan.yaml
     with:
+      scan-mode: changed
       chart-path: chart
       # The always-on public game (chart/values/mgmt/prod.yaml) is the only
       # deployed render. The managed-database sample chart is not listed: its

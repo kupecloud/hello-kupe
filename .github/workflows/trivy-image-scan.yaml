@@ -1,13 +1,11 @@
 name: Trivy Image Scan
 
-# The public-repo copy of github-workflows' trivy-image-scan.yaml (at
-# kupecloud/github-workflows v2.14.0, 3e77e1a3a6e400f0495adfb3fef51f57ffd769f6):
-# github-workflows is private, so a public repo cannot call it, as gates.yaml
-# copies pre-commit-gates.yaml. Keep it in step with the shared file; change
-# nothing below this paragraph except to match it.
-#
-# Scans every container image a repository deploys, first-party and
-# third-party, with Trivy. Images come from any mix of three sources:
+# Public copy of kupecloud/github-workflows v2.22.1
+# (f7af0aa80f744ecfe98242a745844b1dae364fc7). A public repository cannot
+# call the private reusable workflow. Keep this file in sync with upstream.
+
+# Scans container images a repository deploys, first-party and third-party,
+# with Trivy. Images come from any mix of three sources:
 #
 #   - a Helm chart, rendered once per values-files line;
 #   - YAML files (Kubernetes manifests, docker-compose files), read as they are;
@@ -36,6 +34,36 @@ name: Trivy Image Scan
 # never baselined. An entry expires at most 90 days after its review; an
 # expired, malformed or duplicate entry fails the job. Baselined findings stay
 # in results.json and the summary, marked as such. There is no other waiver.
+#
+# What is scanned. For deployed-image PR CI, scan-mode changed compares each
+# checkout using its own caller's literal source inputs and scans only new
+# references (repository, tag and digest as written), including newly eligible
+# images or artifacts selected by a platform change.
+# Baseline and exclusion policy is still validated. A comparison error fails
+# the job. With no prior caller, use the existing chart and manifest paths as
+# the base; head-only inline images and Helm overrides are new inputs.
+# The legacy auto mode compares PR images using the current caller's inputs
+# and also rescans changed baselines. It scans everything if a workflow
+# changes, the base cannot be compared, or the event is not pull_request.
+# Set scan-mode full for a deliberate full scan or for dynamic inputs.
+# A run with nothing to scan downloads no vulnerability DB.
+#
+# Exclusions (exclude-file, default security/dev-only-images.yaml): a reviewed
+# list of images used only for local development and as CI service
+# containers. An extracted image matching an entry exactly is not scanned and
+# is listed as excluded with its reason, but only when every place it was
+# found is a YAML document with no kind (a compose file, a CI services:
+# block): an image a chart render, a Kubernetes resource in a manifests file
+# or the images input names is deployed, so it is never excluded. An entry
+# expires 365 days after its review. report-only (with
+# images-from-exclude-file for the list's own images) gives the scheduled
+# non-blocking report: findings are reported and never fail the job; a tool,
+# DB or scan error still does.
+#
+# The vulnerability DB is restored from the Actions cache (saved keyed by the
+# Trivy version and the DB's build time) and reused while it is at most 12 h
+# old; otherwise a fresh one is downloaded. A DB older than 24 h always fails
+# the job.
 
 on:
   workflow_call:
@@ -43,7 +71,7 @@ on:
       runs-on:
         description: >-
           Runner label. Empty (the default) picks by repository visibility,
-          as pre-commit-gates does: kupe-small for a private repository,
+          as pre-commit-gates does: kupe-light for a private repository,
           ubuntu-latest for a public one. The runner needs bash, curl, jq and
           tar, and egress to github.com, mirror.gcr.io (the Trivy DB) and
           every registry the images live in.
@@ -102,6 +130,42 @@ on:
         required: false
         default: security/image-baselines.yaml
         type: string
+      scan-mode:
+        description: >-
+          changed scans new or newly included images on pull_request, using
+          each revision's literal source inputs and platform. A comparison
+          error fails the job. auto (the default) uses legacy PR diff logic,
+          including baseline changes, and falls back to scanning everything.
+          full scans every image; use it for dynamic inputs or a deliberate
+          full scan.
+        required: false
+        default: auto
+        type: string
+      exclude-file:
+        description: >-
+          Reviewed list of images used only for local development and as CI
+          service containers (see the header comment and README). An extracted
+          image matching an entry exactly, found only in YAML documents with no
+          kind, is not scanned and is listed as excluded. A missing file
+          excludes nothing; a malformed or expired one fails the job.
+        required: false
+        default: security/dev-only-images.yaml
+        type: string
+      images-from-exclude-file:
+        description: >-
+          Scan the exclude-file's own images as well (and exclude nothing):
+          with report-only, the scheduled non-blocking report on them.
+        required: false
+        default: false
+        type: boolean
+      report-only:
+        description: >-
+          Report findings without failing on them: results.json, SARIF and the
+          summary are written as usual and the job fails only when a tool, the
+          vulnerability DB or a scan fails.
+        required: false
+        default: false
+        type: boolean
       platform:
         description: Image platform to scan (the prod node platform)
         required: false
@@ -162,7 +226,9 @@ permissions:
 jobs:
   image-scan:
     name: trivy image scan
-    runs-on: ${{ inputs.runs-on != '' && inputs.runs-on || (github.event.repository.private && 'kupe-small' || 'ubuntu-latest') }}
+    # kupe-light (2Gi limit): measured peak RSS of one scan is 631MiB (README
+    # "Runner selection"); scans run one at a time.
+    runs-on: ${{ inputs.runs-on != '' && inputs.runs-on || (github.event.repository.private && 'kupe-light' || 'ubuntu-latest') }}
     timeout-minutes: 45
     steps:
       - name: Checkout code
@@ -186,6 +252,10 @@ jobs:
           TRIVY_SHA256: ${{ inputs.trivy-sha256 }}
         run: |
           set -euo pipefail
+          if ! command -v jq > /dev/null; then
+            echo "::error::jq is required on the runner (ubuntu-latest and the kupe runner image ship it)."
+            exit 1
+          fi
           bin="$RUNNER_TEMP/bin"
           dl="$(mktemp -d -p "$RUNNER_TEMP")"
           mkdir -p "$bin"
@@ -219,22 +289,197 @@ jobs:
 
           echo "$bin" >> "$GITHUB_PATH"
 
+      - name: Choose scan mode
+        id: mode
+        # Both PR diff modes compare the merge checkout against the event's
+        # exact base SHA. Legacy auto can fall back to a full scan.
+        shell: bash
+        env:
+          SCAN_MODE: ${{ inputs.scan-mode }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          base_dir="$RUNNER_TEMP/trivy-image-scan-base-src"
+
+          # result <mode> <reason> [base sha]: the step outputs.
+          result() {
+            echo "Scan mode: $1 ($2)"
+            {
+              echo "mode=$1"
+              echo "reason=$2"
+              echo "base-sha=${3:-}"
+              echo "base-dir=${3:+$base_dir}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          unavailable() {
+            if [ "$SCAN_MODE" = changed ]; then
+              echo "::error::$1; cannot compare image references."
+              exit 1
+            fi
+            echo "::warning::$1; scanning every image."
+            result full "$1"
+          }
+
+          case "$SCAN_MODE" in
+            full) result full "scan-mode is full" ;;
+            auto | changed) ;;
+            *)
+              echo "::error::scan-mode must be auto, changed or full, got '$SCAN_MODE'."
+              exit 1
+              ;;
+          esac
+          if [ "$EVENT_NAME" != pull_request ]; then
+            if [ "$SCAN_MODE" = changed ]; then
+              echo "::error::scan-mode changed requires a pull_request event."
+              exit 1
+            fi
+            result full "a $EVENT_NAME run scans every image"
+          fi
+          if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+            unavailable "the pull request base commit is unknown"
+          fi
+          rm -rf "$base_dir"
+          if ! git fetch --no-tags --depth=1 origin "$BASE_SHA" \
+            || [ "$(git rev-parse FETCH_HEAD)" != "$BASE_SHA" ] \
+            || ! git worktree add --quiet --detach "$base_dir" FETCH_HEAD; then
+            unavailable "the pull request base $BASE_SHA could not be checked out"
+          fi
+          # Auto reuses the current inputs in the base, so a workflow change
+          # could otherwise hide a new input-supplied reference.
+          if [ "$SCAN_MODE" = auto ] && ! git diff --quiet "$BASE_SHA" HEAD -- .github/workflows/; then
+            result full "the pull request changes a workflow file"
+          fi
+          result diff "pull request: only images new against the base $BASE_SHA" "$BASE_SHA"
+
+      - name: Resolve base scan inputs
+        id: base-inputs
+        if: steps.mode.outputs.mode == 'diff'
+        shell: bash
+        env:
+          SCAN_MODE: ${{ inputs.scan-mode }}
+          CALLER_REF: ${{ github.workflow_ref }}
+          BASE_SHA: ${{ steps.mode.outputs.base-sha }}
+          BASE_SRC: ${{ steps.mode.outputs.base-dir }}
+          RELEASE_NAME: ${{ inputs.release-name }}
+          CHART_PATH: ${{ inputs.chart-path }}
+          TEMPLATE_ARGS: ${{ inputs.template-args }}
+          VALUES_FILES: ${{ inputs.values-files }}
+          MANIFESTS: ${{ inputs.manifests }}
+          IMAGES: ${{ inputs.images }}
+          PLATFORM: ${{ inputs.platform }}
+          EXCLUDE_FILE: ${{ inputs.exclude-file }}
+          FROM_EXCLUDE_FILE: ${{ inputs.images-from-exclude-file }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016
+          current="$(jq -cn '{
+            "release-name": env.RELEASE_NAME, "chart-path": env.CHART_PATH,
+            "template-args": env.TEMPLATE_ARGS, "values-files": env.VALUES_FILES,
+            manifests: env.MANIFESTS, images: env.IMAGES, platform: env.PLATFORM,
+            "exclude-file": env.EXCLUDE_FILE,
+            "images-from-exclude-file": (env.FROM_EXCLUDE_FILE == "true")
+          }')"
+          if [ "$SCAN_MODE" = auto ]; then
+            echo "config=$current" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # github.workflow_ref identifies the caller's workflow, even when
+          # this reusable workflow is pinned in another repository.
+          caller="${CALLER_REF#"$GITHUB_REPOSITORY"/}"
+          path="${caller%%@*}"
+          if [ "$caller" = "$CALLER_REF" ] || [ "$path" = "$caller" ] \
+            || ! [[ "$path" =~ ^[.]github/workflows/[^/@]+[.]ya?ml$ ]]; then
+            echo "::error::Cannot identify the repository's calling workflow from github.workflow_ref."
+            exit 1
+          fi
+
+          # Match the reusable workflow path independently of its version
+          # and the caller's job ID. Accept direct local calls in this repo.
+          # Defaults here mirror workflow_call.inputs for source selectors.
+          workflow_inputs() {
+            local tree="$1" file="$2"
+            git show "$tree:$file" | yq -p=yaml -o=json 'explode(.)' | jq -cs '
+              if length != 1 or (.[0].jobs | type) != "object" then
+                error("expected one workflow document with a jobs mapping")
+              else .[0].jobs end
+              | [to_entries[] | .value
+                | select((.uses // "" | ascii_downcase)
+                    | . == "./.github/workflows/trivy-image-scan.yaml"
+                      or startswith("kupecloud/github-workflows/.github/workflows/trivy-image-scan.yaml@"))]
+              | if length == 0 then null
+                elif length != 1 then error("scan-mode changed requires a single direct Trivy call in the workflow")
+                else .[0].with // {} end
+              | if . == null then . else
+                {"release-name":"scan", "chart-path":"", "template-args":"", "values-files":"",
+                 manifests:"", images:"", platform:"linux/amd64",
+                 "exclude-file":"security/dev-only-images.yaml",
+                 "images-from-exclude-file":false} as $defaults
+                | . as $with
+                | $defaults | with_entries(.key as $key | if $with | has($key) then .value = $with[$key] else . end)
+                | if any(to_entries[]; (.key == "images-from-exclude-file" and (.value | type) != "boolean")
+                    or (.key != "images-from-exclude-file" and (.value | type) != "string")
+                    or (.value | strings | contains("$" + "{{"))) then
+                    error("scan-mode changed requires literal image source inputs")
+                  else . end
+                end'
+          }
+
+          head="$(workflow_inputs HEAD "$path")"
+          # shellcheck disable=SC2016
+          if ! jq -en --argjson head "$head" --argjson current "$current" '$head == $current' > /dev/null; then
+            echo "::error::The caller's literal image source inputs do not match the effective inputs for this run."
+            exit 1
+          fi
+
+          base_path="$path"
+          if [ ! -e "$BASE_SRC/$base_path" ] && [ ! -L "$BASE_SRC/$base_path" ]; then
+            # Follow a Git-detected rename when a caller workflow moves.
+            git diff --find-renames --diff-filter=R --name-status -z "$BASE_SHA" HEAD -- .github/workflows/ > "$RUNNER_TEMP/trivy-workflow-renames"
+            while IFS= read -r -d '' status && IFS= read -r -d '' old && IFS= read -r -d '' new; do
+              if [[ "$status" = R* && "$new" = "$path" ]]; then
+                base_path="$old"
+                break
+              fi
+            done < "$RUNNER_TEMP/trivy-workflow-renames"
+          fi
+          config=null
+          if [ -e "$BASE_SRC/$base_path" ] || [ -L "$BASE_SRC/$base_path" ]; then
+            config="$(workflow_inputs "$BASE_SHA" "$base_path")"
+          fi
+          if [ "$config" = null ]; then
+            # First adoption can compare existing repository files. Inline
+            # references and template overrides have no prior caller value.
+            config="$(jq -c '.images = "" | ."template-args" = "" | ."release-name" = "scan"
+              | .platform = "linux/amd64" | ."images-from-exclude-file" = false | .adopting = true' <<< "$head")"
+          fi
+          echo "config=$config" >> "$GITHUB_OUTPUT"
+
       - name: Render chart
         # One helm template per values-files line, each to its own file, with
         # stderr left on the log so a render warning or failure is visible.
+        # SCAN_OUT is set only by "Render base chart", which runs this same
+        # script (a YAML alias) in the base checkout.
         shell: bash
         env:
           RELEASE_NAME: ${{ inputs.release-name }}
           CHART_PATH: ${{ inputs.chart-path }}
           TEMPLATE_ARGS: ${{ inputs.template-args }}
           VALUES_FILES: ${{ inputs.values-files }}
-        run: |
+        run: &render-script |
           set -euo pipefail
-          out="$RUNNER_TEMP/trivy-image-scan"
+          out="${SCAN_OUT:-$RUNNER_TEMP/trivy-image-scan}"
           rm -rf "$out"
           mkdir -p "$out"
           if [ -z "$CHART_PATH" ]; then
             echo "No chart-path; no chart to render."
+            exit 0
+          fi
+          if [ "${ADOPTING:-}" = true ] && [ ! -e "$CHART_PATH/Chart.yaml" ] && [ ! -L "$CHART_PATH/Chart.yaml" ]; then
+            echo "Chart $CHART_PATH is absent from the base."
             exit 0
           fi
           # template-args is shell words, parsed the same way as in the helm
@@ -248,6 +493,10 @@ jobs:
             shift
             local vargs=()
             for f in "$@"; do
+              if [ "${ADOPTING:-}" = true ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
+                echo "Values file $f is absent from the base; comparing without that layer."
+                continue
+              fi
               vargs+=(-f "$f")
             done
             n=$((n + 1))
@@ -272,23 +521,112 @@ jobs:
             render "chart defaults and template-args"
           fi
 
+      - name: Load exclusions
+        # The repository's reviewed exclude-file, validated and written as
+        # exclusions.json for the scan plan. No file means nothing is excluded.
+        # Anything malformed, unknown or duplicated fails the job, as for
+        # baselines, and so does an entry reviewed more than 365 days ago
+        # (it still applies on day 365): re-review it and update reviewedOn.
+        # A usedIn file that no longer contains its image is a warning: the
+        # list has drifted from the repository.
+        shell: bash
+        env:
+          EXCLUDE_FILE: ${{ inputs.exclude-file }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trivy-image-scan"
+          mkdir -p "$out"
+          if [ -z "$EXCLUDE_FILE" ] || [ ! -e "$EXCLUDE_FILE" ]; then
+            echo "No exclude file${EXCLUDE_FILE:+ at $EXCLUDE_FILE}; no image is excluded."
+            echo '[]' > "$out/exclusions.json"
+            exit 0
+          fi
+          # To a file first: a yq parse error must fail the job.
+          yq -o=json '.' "$EXCLUDE_FILE" > "$out/exclusions.raw.json"
+          # The same reference pattern as "Extract images": an entry names the
+          # exact reference (tag and digest as written) it excludes.
+          ref_re='^[a-z0-9]+([._-]+[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-]+[a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[a-f0-9]{64})?$'
+          # One line per problem; no output means the file is valid.
+          # shellcheck disable=SC2016
+          check='
+            def str: type == "string" and length > 0;
+            def date_ok: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+              and ((try (strptime("%Y-%m-%d") | mktime) catch null) != null);
+            def relpath: if str then (startswith("/") | not) and (split("/") | any(. == "..") | not) else false end;
+            def days: strptime("%Y-%m-%d") | mktime / 86400;
+            ["image", "usedIn", "reason", "reviewedBy", "reviewedOn"] as $keys
+            | if type != "array" or length == 0 then "the file must be a non-empty YAML list of entries"
+              else
+                (to_entries[] | .key as $i | .value as $e
+                 | ("entry \($i)" + (if ($e | type) == "object" and ($e.image | str) then " (\($e.image))" else "" end)) as $at
+                 | if ($e | type) != "object" then "\($at): must be a mapping"
+                   else
+                     (($keys - ($e | keys))[] | "\($at): missing \(.)"),
+                     ((($e | keys) - $keys)[] | "\($at): unknown key \(.)"),
+                     (select(if $e.image | str then $e.image | test($ref_re) | not else true end)
+                       | "\($at): image must be an image reference, matched exactly as written"),
+                     (select(($e.usedIn | type) != "array" or ($e.usedIn | length) == 0
+                         or ($e.usedIn | all(relpath) | not))
+                       | "\($at): usedIn must be a non-empty list of repository-relative file paths"),
+                     (["reason", "reviewedBy"][] as $k | select($e[$k] | str | not)
+                       | "\($at): \($k) must be a non-empty string"),
+                     (select($e.reviewedOn | date_ok | not) | "\($at): reviewedOn must be a YYYY-MM-DD date"),
+                     (select(($e.reviewedOn | date_ok) and $e.reviewedOn > $today)
+                       | "\($at): reviewedOn \($e.reviewedOn) is in the future"),
+                     (select(($e.reviewedOn | date_ok) and ($today | days) - ($e.reviewedOn | days) > 365)
+                       | "\($at): reviewed on \($e.reviewedOn), more than 365 days ago; re-review it and update reviewedOn")
+                   end),
+                ([.[] | select(type == "object" and (.image | str)) | .image] | group_by(.) | map(select(length > 1))[]
+                  | "duplicate entries for \(.[0])")
+              end'
+          today="$(date -u +%Y-%m-%d)"
+          jq -r --arg today "$today" --arg ref_re "$ref_re" "$check" "$out/exclusions.raw.json" \
+            > "$out/exclusion-errors.txt"
+          if [ -s "$out/exclusion-errors.txt" ]; then
+            while IFS= read -r problem; do
+              echo "::error file=$EXCLUDE_FILE::$problem"
+            done < "$out/exclusion-errors.txt"
+            exit 1
+          fi
+          jq -r '.[] | .image as $i | .usedIn[] | [$i, .] | @tsv' "$out/exclusions.raw.json" > "$out/exclusion-uses.tsv"
+          while IFS=$'\t' read -r image file; do
+            if [ ! -f "$file" ]; then
+              echo "::warning file=$EXCLUDE_FILE::$image: usedIn file $file does not exist; update the entry."
+            elif ! grep -qF -- "$image" "$file"; then
+              echo "::warning file=$EXCLUDE_FILE::$file no longer contains $image; update the entry."
+            fi
+          done < "$out/exclusion-uses.tsv"
+          cp "$out/exclusions.raw.json" "$out/exclusions.json"
+          echo "Loaded $(jq length "$out/exclusions.json") exclusion(s) from $EXCLUDE_FILE:"
+          jq -r '.[] | "  \(.image): \(.reason) (reviewed by \(.reviewedBy) on \(.reviewedOn))"' "$out/exclusions.json"
+
       - name: Extract images
-        # Every image reference from the chart renders, the manifests and the
-        # images input, deduplicated into images.txt; refs.tsv records where
-        # each one came from.
+        # Every image reference from the chart renders, the manifests, the
+        # images input and (images-from-exclude-file) the exclude-file,
+        # deduplicated into images.txt; refs.tsv records where each one came
+        # from. "Extract base images" runs this same script (a YAML alias) in
+        # the base checkout, with SCAN_OUT and ERROR_PREFIX set.
         shell: bash
         env:
           MANIFESTS: ${{ inputs.manifests }}
           IMAGES: ${{ inputs.images }}
-        run: |
+          EXCLUDE_FILE: ${{ inputs.exclude-file }}
+          FROM_EXCLUDE_FILE: ${{ inputs.images-from-exclude-file }}
+        run: &extract-script |
           set -euo pipefail
           shopt -s globstar nullglob
-          out="$RUNNER_TEMP/trivy-image-scan"
+          out="${SCAN_OUT:-$RUNNER_TEMP/trivy-image-scan}"
+          # Legacy auto may fall back to full when base extraction fails.
+          # Changed mode treats a base extraction error as a failed check.
+          err="${ERROR_PREFIX-::error::}"
           mkdir -p "$out"
           tab=$'\t'
           bad=0
           # Every `image:` or `imageName:` string at any depth of every
-          # document, as "<Kind>/<name> <path>\t<value>". ConfigMap and Secret
+          # document, as "<Kind>/<name> <path>\tk:<Kind>\t<value>": "k:" alone
+          # is a document with no kind (a compose file, a CI services: block),
+          # anything longer a Kubernetes resource. The value is last so an
+          # empty one is still read. ConfigMap and Secret
           # data is opaque (a key called image is just a key), so those kinds
           # are skipped. No `|| true`: a yq error must fail the gate, never
           # read as an empty, clean result.
@@ -297,7 +635,7 @@ jobs:
             | (.kind // "") as $k | (.metadata.name // "") as $n
             | .. | select(tag == "!!map") | (path | map(tostring) | join(".")) as $p
             | to_entries[] | select((.key == "image" or .key == "imageName") and (.value | tag) == "!!str")
-            | $k + "/" + $n + " " + ([$p, .key] | map(select(. != "")) | join(".")) + "\t" + .value'
+            | $k + "/" + $n + " " + ([$p, .key] | map(select(. != "")) | join(".")) + "\tk:" + $k + "\t" + .value'
           # A docker reference: lowercase name components with an optional
           # registry host[:port], then an optional tag and an optional digest.
           # In a manifests file, a value using shell/compose variable
@@ -310,38 +648,51 @@ jobs:
           pattern_re='[][*!?{}$<>|[:space:]]'
           ref_re='^[a-z0-9]+([._-]+[a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-]+[a-z0-9]+)*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[a-f0-9]{64})?$'
 
+          # refs.tsv: <image>\t<target>\t<label>\t<source>, where <source> is
+          # chart (a chart render), resource (a Kubernetes resource in a
+          # manifests file), file (a manifests document with no kind), input
+          # (the images input) or exclude-file. Only a file image can be
+          # excluded: every other source is deployed (see Plan scan).
           : > "$out/refs.tsv"
           : > "$out/skipped.tsv"
 
-          # extract <label> <file> <require-image> <no-interpolation>: add
-          # every image in <file>. With require-image=1 a file with no image
+          # extract <label> <file> <require-image> <no-interpolation> <chart>:
+          # add every image in <file>. With require-image=1 a file with no image
           # fails the job (a chart render with nothing to scan means a wrong
           # chart path or values). With no-interpolation=1 a value using
-          # variable interpolation fails the job instead of being skipped.
+          # variable interpolation fails the job instead of being skipped. With
+          # chart=1 every image's source is chart, whatever its document.
           extract() {
-            local label="$1" file="$2" require="$3" no_interp="$4" found=0 target image
+            local label="$1" file="$2" require="$3" no_interp="$4" chart="$5" found=0 target kind image src
             # To a file first: a yq error inside <(...) would not stop the job.
             yq -N "$expr" "$file" > "$out/extract.tsv"
-            while IFS="$tab" read -r target image; do
+            while IFS="$tab" read -r target kind image; do
               [ -n "$target" ] || continue
+              if [ "$chart" = 1 ]; then
+                src="chart"
+              elif [ "$kind" = "k:" ]; then
+                src="file"
+              else
+                src="resource"
+              fi
               if [ -z "$image" ]; then
-                echo "::error::$target is an empty image ($label)"
+                echo "${err}$target is an empty image ($label)"
                 bad=1
               elif [[ "$image" =~ $ref_re ]]; then
-                printf '%s\t%s\t%s\n' "$image" "$target" "$label" >> "$out/refs.tsv"
+                printf '%s\t%s\t%s\t%s\n' "$image" "$target" "$label" "$src" >> "$out/refs.tsv"
                 found=1
               elif [ "$no_interp" = 1 ] && [[ "$image" =~ $interp_re ]]; then
-                echo "::error::$target is '$image', which uses variable interpolation, so the image cannot be scanned ($label). Write the literal reference."
+                echo "${err}$target is '$image', which uses variable interpolation, so the image cannot be scanned ($label). Write the literal reference."
                 bad=1
               elif [[ "$image" =~ $pattern_re ]]; then
                 printf '%s\t%s\t%s\n' "$image" "$target" "$label" >> "$out/skipped.tsv"
               else
-                echo "::error::$target is '$image', which is neither an image reference nor a pattern ($label)"
+                echo "${err}$target is '$image', which is neither an image reference nor a pattern ($label)"
                 bad=1
               fi
             done < "$out/extract.tsv"
             if [ "$require" = 1 ] && [ "$found" -eq 0 ]; then
-              echo "::error::'$label' has no image to scan; check the chart path and values files."
+              echo "${err}'$label' has no image to scan; check the chart path and values files."
               bad=1
             fi
           }
@@ -349,7 +700,7 @@ jobs:
           sources=0
           i=1
           while [ -f "$out/$i.yaml" ]; do
-            extract "render: $(cat "$out/$i.label")" "$out/$i.yaml" 1 0
+            extract "render: $(cat "$out/$i.label")" "$out/$i.yaml" 1 0 1
             sources=$((sources + 1))
             i=$((i + 1))
           done
@@ -363,13 +714,18 @@ jobs:
             # The line is a glob on purpose: expand it unquoted.
             # shellcheck disable=SC2206
             matches=($line)
-            if [ "${#matches[@]}" -eq 0 ]; then
-              echo "::error::manifests line '$line' matches no file."
-              bad=1
+            if [ "${#matches[@]}" -eq 0 ] \
+              || { [ "${#matches[@]}" -eq 1 ] && [ ! -e "${matches[0]}" ] && [ ! -L "${matches[0]}" ]; }; then
+              if [ "${ADOPTING:-}" = true ]; then
+                echo "Manifests line '$line' has no files in the base."
+              else
+                echo "${err}manifests line '$line' matches no file."
+                bad=1
+              fi
               continue
             fi
             for f in "${matches[@]}"; do
-              extract "$f" "$f" 0 1
+              extract "$f" "$f" 0 1 0
               sources=$((sources + 1))
             done
           done <<< "$MANIFESTS"
@@ -381,26 +737,45 @@ jobs:
               '' | '#'*) continue ;;
             esac
             if ! [[ "$line" =~ $ref_re ]]; then
-              echo "::error::images line '$line' is not an image reference."
+              echo "${err}images line '$line' is not an image reference."
               bad=1
               continue
             fi
-            printf '%s\t%s\t%s\n' "$line" "images input" "images input" >> "$out/refs.tsv"
+            printf '%s\t%s\t%s\t%s\n' "$line" "images input" "images input" input >> "$out/refs.tsv"
             sources=$((sources + 1))
           done <<< "$IMAGES"
 
-          if [ "$sources" -eq 0 ]; then
-            echo "::error::Nothing to scan: set chart-path, manifests or images."
+          if [ "$FROM_EXCLUDE_FILE" = true ]; then
+            if [ -z "$EXCLUDE_FILE" ] || [ ! -f "$EXCLUDE_FILE" ]; then
+              echo "${err}images-from-exclude-file is set but there is no exclude-file${EXCLUDE_FILE:+ at $EXCLUDE_FILE}."
+              bad=1
+            else
+              # To a file first: a yq error must fail the job.
+              yq -N '.[].image' "$EXCLUDE_FILE" > "$out/exclude-images.txt"
+              while IFS= read -r line; do
+                if ! [[ "$line" =~ $ref_re ]]; then
+                  echo "${err}$EXCLUDE_FILE image '$line' is not an image reference."
+                  bad=1
+                  continue
+                fi
+                printf '%s\t%s\t%s\t%s\n' "$line" "exclude-file" "exclude-file: $EXCLUDE_FILE" exclude-file >> "$out/refs.tsv"
+                sources=$((sources + 1))
+              done < "$out/exclude-images.txt"
+            fi
+          fi
+
+          if [ "$sources" -eq 0 ] && [ "${ADOPTING:-}" != true ]; then
+            echo "${err}Nothing to scan: set chart-path, manifests, images or images-from-exclude-file."
             exit 1
           fi
 
           cut -f1 "$out/refs.tsv" | LC_ALL=C sort -u > "$out/images.txt"
-          if [ ! -s "$out/images.txt" ]; then
-            echo "::error::No image reference found in any source."
+          if [ ! -s "$out/images.txt" ] && [ "${ADOPTING:-}" != true ]; then
+            echo "${err}No image reference found in any source."
             bad=1
           fi
           echo "Found $(wc -l < "$out/images.txt" | tr -d ' ') unique image(s):"
-          while IFS="$tab" read -r image target label; do
+          while IFS="$tab" read -r image target label _; do
             echo "  $image  <- $target ($label)"
           done < <(LC_ALL=C sort -u "$out/refs.tsv")
           if [ -s "$out/skipped.tsv" ]; then
@@ -412,6 +787,38 @@ jobs:
           if [ "$bad" -ne 0 ]; then
             exit 1
           fi
+
+      # Actions can evaluate env for skipped steps. Full mode has no base inputs.
+      - name: Render base chart
+        id: base-render
+        if: steps.mode.outputs.mode == 'diff'
+        continue-on-error: ${{ inputs.scan-mode == 'auto' }}
+        shell: bash
+        working-directory: ${{ steps.mode.outputs.base-dir }}
+        env:
+          SCAN_OUT: ${{ runner.temp }}/trivy-image-scan-base
+          ADOPTING: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').adopting }}
+          RELEASE_NAME: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').release-name }}
+          CHART_PATH: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').chart-path }}
+          TEMPLATE_ARGS: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').template-args }}
+          VALUES_FILES: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').values-files }}
+        run: *render-script
+
+      - name: Extract base images
+        id: base-extract
+        if: steps.mode.outputs.mode == 'diff' && steps.base-render.outcome == 'success'
+        continue-on-error: ${{ inputs.scan-mode == 'auto' }}
+        shell: bash
+        working-directory: ${{ steps.mode.outputs.base-dir }}
+        env:
+          SCAN_OUT: ${{ runner.temp }}/trivy-image-scan-base
+          ERROR_PREFIX: "${{ inputs.scan-mode == 'auto' && 'base (not annotated): ' || '::error::' }}"
+          ADOPTING: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').adopting }}
+          MANIFESTS: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').manifests }}
+          IMAGES: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').images }}
+          EXCLUDE_FILE: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').exclude-file }}
+          FROM_EXCLUDE_FILE: ${{ fromJSON(steps.base-inputs.outputs.config || '{}').images-from-exclude-file }}
+        run: *extract-script
 
       - name: Load baselines
         # The repository's reviewed baseline file, validated and written as
@@ -496,10 +903,163 @@ jobs:
           jq -r '.[] | "  \(.image)@\(.digest) [\(.platforms | join(", "))]: \(.findings | length) finding(s), reviewed by \(.reviewedBy) on \(.reviewedOn), expires \(.expires)"' \
             "$out/baselines.json"
 
+      - name: Plan scan
+        id: plan
+        # Decides what is scanned, into scan.txt, and records the rest in
+        # plan.json for results.json and the summary:
+        #   - excluded: an extracted image an exclude-file entry names exactly,
+        #     found only in documents with no kind (never one a chart render, a
+        #     Kubernetes resource or the images input deploys; never with
+        #     images-from-exclude-file, which scans the list instead);
+        #   - skipped: in diff mode, an image whose reference is in the base's
+        #     own scan set (its images less those the base excluded, by the
+        #     same rule and platform). Legacy auto reuses the head platform
+        #     and also scans images with changed baselines;
+        #   - removed: in diff mode, a base image the head no longer has.
+        # A comparison error fails changed mode. Auto falls back to full.
+        shell: bash
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+          MODE_REASON: ${{ steps.mode.outputs.reason }}
+          BASE_SHA: ${{ steps.mode.outputs.base-sha }}
+          BASE_SRC: ${{ steps.mode.outputs.base-dir }}
+          BASE_EXTRACT: ${{ steps.base-extract.outcome }}
+          SCAN_MODE: ${{ inputs.scan-mode }}
+          PLATFORM: ${{ inputs.platform }}
+          BASE_CONFIG: ${{ steps.base-inputs.outputs.config }}
+          BASELINE_FILE: ${{ inputs.baseline-file }}
+          FROM_EXCLUDE_FILE: ${{ inputs.images-from-exclude-file }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trivy-image-scan"
+          base_out="$RUNNER_TEMP/trivy-image-scan-base"
+          mode="$MODE"
+          reason="$MODE_REASON"
+          base_platform="$PLATFORM"
+          echo '[]' > "$out/base-images.json"
+          echo '[]' > "$out/base-exclusions.json"
+          echo '[]' > "$out/base-baselines.json"
+
+          comparison_error() {
+            if [ "$SCAN_MODE" = changed ]; then
+              echo "::error::$1; cannot compare image references."
+              exit 1
+            fi
+            echo "::warning::$1; scanning every image."
+            mode=full
+            reason="$1"
+          }
+
+          # base_list <file> <jq filter> <dest>: a base YAML file read through
+          # the filter, which must give a JSON array, into <dest>. A missing
+          # file is an empty list; anything else returns non-zero.
+          base_list() {
+            local file="$BASE_SRC/$1"
+            if [ -z "$1" ] || [ ! -e "$file" ]; then
+              echo '[]' > "$3"
+              return 0
+            fi
+            yq -o=json '.' "$file" > "$3.raw" && jq -e "$2" "$3.raw" > "$3"
+          }
+
+          # images_of <refs.tsv>: one object per reference, with deployedBy
+          # naming every source that deploys it (empty: found only in
+          # documents with no kind, so an exclude-file entry may cover it).
+          images_of() {
+            jq -R -s 'split("\n") | map(select(. != "") | split("\t")
+                | {reference: .[0], by: ({chart: "a chart render", resource: "a Kubernetes resource in \(.[2])",
+                                          input: "the images input"}[.[3]])})
+              | group_by(.reference)
+              | map({reference: .[0].reference, deployedBy: (map(.by // empty) | unique)})' "$1"
+          }
+
+          if [ "$mode" = diff ]; then
+            base_exclude_file="$(jq -er '."exclude-file"' <<< "$BASE_CONFIG")"
+            base_from_exclude_file="$(jq -r '."images-from-exclude-file"' <<< "$BASE_CONFIG")"
+            if [ "$SCAN_MODE" = changed ]; then
+              base_platform="$(jq -er '.platform' <<< "$BASE_CONFIG")"
+            fi
+            if [ "$BASE_EXTRACT" != success ] || [ ! -f "$base_out/refs.tsv" ]; then
+              comparison_error "the images of the pull request base $BASE_SHA could not be listed (see Render base chart and Extract base images)"
+            elif [ "$base_from_exclude_file" != true ] \
+              && ! base_list "$base_exclude_file" 'if type == "array" and all(if type == "object" then (.image | type) == "string" else false end) then map(.image) else error("not a list of images") end' \
+                "$out/base-exclusions.json"; then
+              comparison_error "the pull request base's $base_exclude_file could not be read"
+            elif [ "$SCAN_MODE" = auto ] && ! base_list "$BASELINE_FILE" 'if type == "array" then . else error("not a list") end' \
+              "$out/base-baselines.json"; then
+              comparison_error "the pull request base's $BASELINE_FILE could not be read"
+            else
+              images_of "$base_out/refs.tsv" > "$out/base-images.json"
+            fi
+          fi
+
+          images_of "$out/refs.tsv" > "$out/head-images.json"
+
+          # shellcheck disable=SC2016
+          plan='
+            # "repository@digest" of a reference that pins a digest, else null;
+            # the same split as "Scan images" makes.
+            def repo_digest: if test("@") then (split("@") as [$n, $d]
+              | ($n | if (split("/") | last | test(":")) then sub(":[^:/]*$"; "") else . end) + "@" + $d) else null end;
+            ($exclusions[0] | map({key: .image, value: .}) | from_entries) as $ex
+            | [$base_images[0][] | select((.reference | IN($base_excluded[0][])) and .deployedBy == [] | not)
+                | .reference] as $base_set
+            | (($baselines[0] - $base_baselines[0]) + ($base_baselines[0] - $baselines[0])
+                | map(select(type == "object") | "\(.image)@\(.digest)") | unique) as $changed
+            | $head[0] as $head
+            | [$head[] | . as $h | ($h.reference | repo_digest) as $rd
+                | if ($from_exclude | not) and $ex[$h.reference] != null and $h.deployedBy == [] then
+                    {reference, action: "excluded", entry: $ex[$h.reference]}
+                  elif $mode == "full" then
+                    {reference, action: "scan", reason: "full scan"}
+                  elif ($h.reference | IN($base_set[]) | not) then
+                    {reference, action: "scan", reason: "new or changed against the base"}
+                  elif $platform != $base_platform then
+                    {reference, action: "scan", reason: "its scan platform changed"}
+                  elif $scan_mode == "auto" and $rd != null and ($rd | IN($changed[])) then
+                    {reference, action: "scan", reason: "its baseline entry changed"}
+                  else
+                    {reference, action: "skip", reason: "unchanged against the base"}
+                  end] as $rows
+            | {mode: $mode, reason: $reason, base: (if $mode == "diff" then $base else null end),
+               scan: [$rows[] | select(.action == "scan") | {reference, reason}],
+               skipped: [$rows[] | select(.action == "skip") | {reference, reason}],
+               excluded: [$rows[] | select(.action == "excluded")
+                 | {reference, reason: .entry.reason, reviewedBy: .entry.reviewedBy,
+                    reviewedOn: .entry.reviewedOn, usedIn: .entry.usedIn}],
+               notExcluded: [$head[] | select(($from_exclude | not) and $ex[.reference] != null and .deployedBy != [])
+                 | {reference, deployedBy}],
+               removed: (if $mode == "diff" then [$base_images[0][].reference] - [$head[].reference] else [] end)}'
+          jq -n --slurpfile head "$out/head-images.json" \
+            --slurpfile exclusions "$out/exclusions.json" \
+            --slurpfile baselines "$out/baselines.json" \
+            --slurpfile base_images "$out/base-images.json" \
+            --slurpfile base_excluded "$out/base-exclusions.json" \
+            --slurpfile base_baselines "$out/base-baselines.json" \
+            --arg mode "$mode" --arg scan_mode "$SCAN_MODE" --arg reason "$reason" --arg base "$BASE_SHA" \
+            --arg platform "$PLATFORM" --arg base_platform "$base_platform" \
+            --argjson from_exclude "$( [ "$FROM_EXCLUDE_FILE" = true ] && echo true || echo false )" \
+            "$plan" > "$out/plan.json"
+
+          jq -r '.scan[].reference' "$out/plan.json" > "$out/scan.txt"
+          count="$(jq '.scan | length' "$out/plan.json")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+          while IFS= read -r line; do
+            echo "::warning::$line"
+          done < <(jq -r '.notExcluded[]
+            | "\(.reference) is in the exclude-file but \(.deployedBy | join(" and ")) deploys it, so the exclusion does not apply; drop the entry or the deployed use."' \
+            "$out/plan.json")
+          echo "Scan mode: $mode ($reason)"
+          jq -r '"Scanning \(.scan | length) image(s):", (.scan[] | "  \(.reference) (\(.reason))"),
+            (select(.skipped != []) | "Skipped \(.skipped | length) image(s) unchanged against the base:", (.skipped[] | "  \(.reference)")),
+            (select(.excluded != []) | "Excluded \(.excluded | length) image(s):", (.excluded[] | "  \(.reference): \(.reason)")),
+            (select(.removed != []) | "Removed against the base:", (.removed[] | "  \(.)"))' "$out/plan.json"
+
       - name: Configure ghcr.io credentials
         # A Docker config holding a ghcr.io credential only, in a directory of
         # its own, so the token is never offered to any other registry.
-        if: inputs.ghcr-login
+        if: inputs.ghcr-login && steps.plan.outputs.count != '0'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -511,24 +1071,74 @@ jobs:
           printf '{"auths":{"ghcr.io":{"auth":"%s"}}}\n' "$auth" > "$dir/config.json"
           echo "DOCKER_CONFIG=$dir" >> "$GITHUB_ENV"
 
-      - name: Download vulnerability DB
-        # A fresh cache directory per job, so the DB is always downloaded and
-        # never served stale from a runner cache. A download failure, or a DB
-        # older than 24 h (a stale mirror), fails the job.
+      - name: Restore vulnerability DB cache
+        # The newest DB this repository's runs saved with this Trivy version
+        # (keyed by the version and the DB's build time, see "Save
+        # vulnerability DB cache") that this ref can read: its own, else the
+        # default branch's. The version is in the key so a Trivy bump never
+        # restores a DB saved by another version. "Prepare vulnerability DB"
+        # decides whether it is fresh enough to use.
+        if: steps.plan.outputs.count != '0'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/trivy-cache/db
+          key: trivy-db-v2-${{ runner.os }}-${{ inputs.trivy-version }}-restore
+          restore-keys: |
+            trivy-db-v2-${{ runner.os }}-${{ inputs.trivy-version }}-
+
+      - name: Prepare vulnerability DB
+        id: db
+        # A restored DB is used while it is at most 12 h old; otherwise (or
+        # with none, one whose metadata Trivy cannot read, or one with no
+        # trivy.db file) a fresh DB is downloaded. Either way a DB older than
+        # 24 h (a stale mirror) fails the job, as does a download failure.
+        # Skipped when there is nothing to scan. Only the metadata and the
+        # presence of trivy.db are checked here: a restored trivy.db that is
+        # present but cannot be opened is still reused until it is 12 h old,
+        # and every scan in those runs fails as a scan error (never a pass).
+        # Only a DB this workflow downloaded and read is ever saved; to clear a
+        # bad one, delete the trivy-db-v2-* cache entries (gh cache delete).
+        if: steps.plan.outputs.count != '0'
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v jq > /dev/null; then
-            echo "::error::jq is required on the runner (ubuntu-latest and the kupe runner image ship it)."
-            exit 1
-          fi
           out="$RUNNER_TEMP/trivy-image-scan"
           cache="$RUNNER_TEMP/trivy-cache"
-          rm -rf "$cache"
-          trivy image --cache-dir "$cache" --download-db-only --no-progress
+          reuse=$((12 * 3600))
+          mkdir -p "$cache"
+          # Only the DB is carried between runs; nothing else in the cache
+          # directory is kept.
+          find "$cache" -mindepth 1 -maxdepth 1 ! -name db -exec rm -rf {} +
+
+          # db_age: seconds since the cached DB was built, from Trivy's own
+          # reading of it; empty when there is no DB it can read.
+          # UpdatedAt is RFC 3339 with nanoseconds; whole seconds are enough.
+          db_age() {
+            trivy version --cache-dir "$cache" --format json > "$out/trivy-version.json" \
+              && jq -r '.VulnerabilityDB.UpdatedAt // empty | sub("\\.[0-9]+"; "") | now - fromdateiso8601 | floor' \
+                "$out/trivy-version.json"
+          }
+
+          downloaded=false
+          cached=""
+          if [ ! -s "$cache/db/trivy.db" ] || [ ! -f "$cache/db/metadata.json" ] || ! cached="$(db_age)"; then
+            cached=""
+          fi
+          if [ -n "$cached" ] && [ "$cached" -le "$reuse" ]; then
+            echo "Using the cached vulnerability DB ($((cached / 3600)) h old)."
+          else
+            if [ -n "$cached" ]; then
+              echo "The cached vulnerability DB is $((cached / 3600)) h old (over 12 h); downloading a fresh one."
+            else
+              echo "No usable cached vulnerability DB; downloading one."
+            fi
+            rm -rf "$cache/db"
+            trivy image --cache-dir "$cache" --download-db-only --no-progress
+            downloaded=true
+          fi
+
           trivy version --cache-dir "$cache" --format json > "$out/trivy-version.json"
           updated="$(jq -r '.VulnerabilityDB.UpdatedAt' "$out/trivy-version.json")"
-          # UpdatedAt is RFC 3339 with nanoseconds; whole seconds are enough.
           age="$(jq -r '.VulnerabilityDB.UpdatedAt | sub("\\.[0-9]+"; "") | now - fromdateiso8601 | floor' \
             "$out/trivy-version.json")"
           echo "Trivy vulnerability DB updated $updated ($((age / 3600)) h ago)"
@@ -536,6 +1146,21 @@ jobs:
             echo "::error::Trivy vulnerability DB is $((age / 3600)) h old (updated $updated); refusing to scan with a stale DB."
             exit 1
           fi
+          {
+            echo "downloaded=$downloaded"
+            # The build time as digits (20261105070054), the cache key suffix.
+            echo "updated=$(jq -r '.VulnerabilityDB.UpdatedAt | sub("\\.[0-9]+"; "") | fromdateiso8601 | strftime("%Y%m%d%H%M%S")' "$out/trivy-version.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Save vulnerability DB cache
+        # Only a DB this run downloaded, under its build time, so later runs
+        # (this ref's, and every pull request's once a default-branch run has
+        # saved one) restore it instead of downloading.
+        if: steps.db.outputs.downloaded == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/trivy-cache/db
+          key: trivy-db-v2-${{ runner.os }}-${{ inputs.trivy-version }}-${{ steps.db.outputs.updated }}
 
       - name: Scan images
         id: scan
@@ -549,8 +1174,9 @@ jobs:
         # is set). The report written to the artifact has the image config
         # (env, history, layer CreatedBy) stripped; SARIF is converted from
         # that stripped report. Every image is scanned before the step ends,
-        # so one run lists them all. results.json is the machine-readable
-        # outcome (schema in the README).
+        # so one run lists them all. Only the images in scan.txt (see Plan
+        # scan) are scanned. results.json is the machine-readable outcome
+        # (schema in the README).
         shell: bash
         env:
           PLATFORM: ${{ inputs.platform }}
@@ -636,7 +1262,7 @@ jobs:
               echo "::error::Trivy could not scan $image for $PLATFORM; see the log above."
             fi
             echo "::endgroup::"
-          done < "$out/images.txt"
+          done < "$out/scan.txt"
           echo "Scanned $n image(s)."
 
       - name: Apply baselines and gate
@@ -646,17 +1272,35 @@ jobs:
         # platform, and the finding's exact ID, package, installed version and
         # target. A CRITICAL is never baselined; a tag-only reference never
         # matches. The job then fails on any image that could not be scanned
-        # or still has a fixable HIGH/CRITICAL. Baselined findings stay in
-        # results.json and the summary.
+        # or (unless report-only) still has a fixable HIGH/CRITICAL. Baselined
+        # findings stay in results.json and the summary, as do the skipped,
+        # excluded and removed images from the plan.
         shell: bash
         env:
           PLATFORM: ${{ inputs.platform }}
+          REPORT_ONLY: ${{ inputs.report-only }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
           out="$RUNNER_TEMP/trivy-image-scan"
           reports="$out/reports"
           mkdir -p "$reports"
-          jq -s '.' "$out"/images/*.result.json > "$out/images.results.json"
+          if [ ! -f "$out/plan.json" ]; then
+            echo "::error::No scan plan (plan.json); the Plan scan step did not run."
+            exit 1
+          fi
+          results=("$out"/images/*.result.json)
+          if [ "${#results[@]}" -eq 0 ]; then
+            echo '[]' > "$out/images.results.json"
+          else
+            jq -s '.' "${results[@]}" > "$out/images.results.json"
+          fi
+          # With report-only, findings are warnings and never fail the job;
+          # scan errors always fail it.
+          level=error
+          if [ "$REPORT_ONLY" = true ]; then
+            level=warning
+          fi
 
           # shellcheck disable=SC2016
           apply='
@@ -678,15 +1322,18 @@ jobs:
                         | select(key as $k | $keys | index([$k]) != null)]}) end)
                 | .status = (if .status == "error" then "error"
                     elif (.findings | map(select(.fixable and (.baselined | not))) | length) > 0 then "fail"
-                    else "pass" end))'
+                    else "pass" end)
+                | .scanReason = ([$plan[0].scan[] | select(.reference == $img.reference) | .reason][0]))'
           jq -n --slurpfile images "$out/images.results.json" \
-            --slurpfile baselines "$out/baselines.json" "$apply" > "$out/images.gated.json"
+            --slurpfile baselines "$out/baselines.json" \
+            --slurpfile plan "$out/plan.json" "$apply" > "$out/images.gated.json"
 
-          failed=0
+          errors=0
+          findings=0
           while IFS= read -r row; do
             ref="$(jq -r '.reference' <<< "$row")"
             if jq -e '.baseline.criticalNotBaselined | length > 0' <<< "$row" > /dev/null; then
-              echo "::error::$ref: the baseline lists CRITICAL finding(s), which can never be baselined:"
+              echo "::$level::$ref: the baseline lists CRITICAL finding(s), which can never be baselined:"
               jq -r '.baseline.criticalNotBaselined[] | "  \(.id) \(.package) \(.installedVersion)"' <<< "$row"
             fi
             if jq -e '.baseline.notFound | length > 0' <<< "$row" > /dev/null; then
@@ -695,38 +1342,62 @@ jobs:
             fi
             case "$(jq -r '.status' <<< "$row")" in
               error)
-                failed=1
+                errors=$((errors + 1))
                 ;;
               fail)
-                failed=1
-                echo "::error::$ref has $(jq '[.findings[] | select(.fixable and (.baselined | not))] | length' <<< "$row") fixable HIGH/CRITICAL finding(s) not covered by a reviewed baseline; bump it to a fixed release."
+                findings=$((findings + 1))
+                echo "::$level::$ref has $(jq '[.findings[] | select(.fixable and (.baselined | not))] | length' <<< "$row") fixable HIGH/CRITICAL finding(s) not covered by a reviewed baseline; bump it to a fixed release."
                 jq -r '.findings[] | select(.fixable and (.baselined | not)) | "  \(.severity) \(.id) \(.package) \(.installedVersion) -> \(.fixedVersion) (\(.target))"' <<< "$row"
                 ;;
             esac
           done < <(jq -c '.[]' "$out/images.gated.json")
 
           status=pass
-          [ "$failed" -eq 0 ] || status=fail
+          if [ "$errors" -ne 0 ] || [ "$findings" -ne 0 ]; then
+            status=fail
+          fi
+          version='null'
+          if [ -f "$out/trivy-version.json" ]; then
+            version="$(jq -c '{version: .Version, vulnerabilityDB: {updatedAt: .VulnerabilityDB.UpdatedAt}}' \
+              "$out/trivy-version.json")"
+          fi
           jq -n --slurpfile images "$out/images.gated.json" \
-            --slurpfile version "$out/trivy-version.json" \
+            --slurpfile plan "$out/plan.json" \
+            --argjson trivy "$version" \
+            --argjson report_only "$( [ "$REPORT_ONLY" = true ] && echo true || echo false )" \
             --arg platform "$PLATFORM" --arg status "$status" '
-            {schemaVersion: 2,
+            {schemaVersion: 3,
              status: $status,
+             reportOnly: $report_only,
              platform: $platform,
              policy: {severities: ["HIGH", "CRITICAL"], ignoreUnfixed: true,
                       fails: "any HIGH or CRITICAL finding with a fix available that no reviewed baseline covers (a CRITICAL is never baselined)"},
-             trivy: {version: $version[0].Version,
-                     vulnerabilityDB: {updatedAt: $version[0].VulnerabilityDB.UpdatedAt}},
-             images: ($images[0] | sort_by(.reference))}' > "$reports/results.json"
+             trivy: $trivy,
+             scan: {mode: $plan[0].mode, reason: $plan[0].reason, base: $plan[0].base},
+             images: ($images[0] | sort_by(.reference)),
+             skipped: ($plan[0].skipped | sort_by(.reference)),
+             excluded: ($plan[0].excluded | sort_by(.reference)),
+             removed: ($plan[0].removed | sort)}' > "$reports/results.json"
 
-          # Summary: one row per image, then the failing and baselined findings.
+          # Summary: what was scanned and why, one row per scanned image, the
+          # failing and baselined findings, then what was not scanned.
           {
-            echo "Scanned $(jq '.images | length' "$reports/results.json") image(s) for \`$PLATFORM\` with Trivy $(jq -r '.trivy.version' "$reports/results.json") (DB $(jq -r '.trivy.vulnerabilityDB.updatedAt' "$reports/results.json")); policy: fail on HIGH/CRITICAL with a fix available, unless a reviewed baseline covers it."
+            jq -r '"Scan mode **\(.scan.mode)**: \(.scan.reason)."' "$reports/results.json"
             echo ""
-            echo "| Image | Result | Fixable HIGH/CRITICAL | Of which baselined | Unfixed HIGH/CRITICAL (reported only) |"
-            echo "| --- | --- | --- | --- | --- |"
-            jq -r '.images[] | "| `\(.reference)` | \({pass: "pass", fail: "**FAIL**", error: "**SCAN ERROR**"}[.status]) | \(.counts.fixable) | \(.counts.baselined) | \(.counts.unfixed) |"' \
-              "$reports/results.json"
+            if [ "$(jq '.images | length' "$reports/results.json")" -eq 0 ]; then
+              echo "No image to scan, so no vulnerability DB was downloaded."
+            else
+              echo "Scanned $(jq '.images | length' "$reports/results.json") image(s) for \`$PLATFORM\` with Trivy $(jq -r '.trivy.version' "$reports/results.json") (DB $(jq -r '.trivy.vulnerabilityDB.updatedAt' "$reports/results.json")); policy: fail on HIGH/CRITICAL with a fix available, unless a reviewed baseline covers it."
+              if [ "$REPORT_ONLY" = true ]; then
+                echo ""
+                echo "**Report only:** findings are reported and do not fail this run; a scan error still does."
+              fi
+              echo ""
+              echo "| Image | Result | Fixable HIGH/CRITICAL | Of which baselined | Unfixed HIGH/CRITICAL (reported only) | Why scanned |"
+              echo "| --- | --- | --- | --- | --- | --- |"
+              jq -r '.images[] | "| `\(.reference)` | \({pass: "pass", fail: "**FAIL**", error: "**SCAN ERROR**"}[.status]) | \(.counts.fixable) | \(.counts.baselined) | \(.counts.unfixed) | \(.scanReason // "") |"' \
+                "$reports/results.json"
+            fi
             jq -r '.images[] | select(.status == "fail")
               | "", "**`\(.reference)`** fixable findings not baselined:", "",
                 "| Severity | ID | Package | Installed | Fixed in | Target |", "| --- | --- | --- | --- | --- | --- |",
@@ -739,10 +1410,23 @@ jobs:
                 (.findings[] | select(.baselined)
                   | "| \(.severity) | \(.id) | `\(.package)` | \(.installedVersion) | \(.fixedVersion) | `\(.target)` |")' \
               "$reports/results.json"
+            jq -r 'select(.skipped != []) | "", "**Skipped because the references match the base** (the in-cluster Trivy Operator covers deployed images):", "",
+                (.skipped[] | "- `\(.reference)`")' "$reports/results.json"
+            jq -r 'select(.excluded != []) | "", "**Excluded** (reviewed dev-only images, not scanned here):", "",
+                (.excluded[] | "- `\(.reference)`: \(.reason) (reviewed by \(.reviewedBy) on \(.reviewedOn))")' "$reports/results.json"
+            jq -r 'select(.removed != []) | "", "**Removed** against the base:", "",
+                (.removed[] | "- `\(.)`")' "$reports/results.json"
           } > "$out/summary.md"
           cat "$out/summary.md"
 
-          if [ "$failed" -ne 0 ]; then
+          if [ "$errors" -ne 0 ]; then
+            exit 1
+          fi
+          if [ "$findings" -ne 0 ]; then
+            if [ "$REPORT_ONLY" = true ]; then
+              echo "Report only: $findings image(s) have fixable HIGH or CRITICAL findings outside a reviewed baseline; not failing."
+              exit 0
+            fi
             exit 1
           fi
           echo "OK: no image has a fixable HIGH or CRITICAL vulnerability outside a reviewed baseline"
@@ -767,19 +1451,24 @@ jobs:
         run: |
           set -euo pipefail
           summary="$RUNNER_TEMP/trivy-image-scan/summary.md"
+          results="$RUNNER_TEMP/trivy-image-scan/reports/results.json"
           {
             echo "### Trivy Image Scan"
             case "$OUTCOME" in
               success)
-                echo "No scanned image has a fixable HIGH or CRITICAL vulnerability outside a reviewed baseline."
+                if [ -f "$results" ] && [ "$(jq -r '.reportOnly and .status == "fail"' "$results")" = true ]; then
+                  echo "**REPORT ONLY** — an image has a fixable HIGH or CRITICAL vulnerability no reviewed baseline covers; reported, not failed."
+                else
+                  echo "No scanned image has a fixable HIGH or CRITICAL vulnerability outside a reviewed baseline."
+                fi
                 ;;
               failure)
                 echo "**FAILED** — an image has a fixable HIGH or CRITICAL vulnerability no reviewed baseline covers (bump its pin to a fixed release), or could not be scanned."
                 ;;
               *)
                 # An earlier step failed (tool install, checksum, render,
-                # extraction, baseline file, DB download or the scan itself),
-                # so the gate never ran.
+                # extraction, exclude or baseline file, DB or the scan
+                # itself), so the gate never ran.
                 echo "**NOT RUN** — an earlier step failed before the scan."
                 echo ""
                 echo "- Review the job logs for the failing step."
