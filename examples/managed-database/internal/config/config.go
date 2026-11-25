@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/binding"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/binding"
 )
 
 // Bindings follow the servicebinding.io convention: each binding Secret is

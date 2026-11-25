@@ -1,0 +1,4 @@
+# The version of Hello Kupe that the staging cluster runs.
+# To promote a release, change the tag here in a pull request.
+image:
+  tag: "1.9.2"

@@ -267,10 +267,12 @@ quota is reached, whatever `maxReplicas` says.
 * `chart` - the Helm chart used by Argo CD and local installs
 * `infra` - [Terraform/OpenTofu infrastructure](infra/README.md): cluster, managed
   PostgreSQL database and database bindings
-* `samples/managed-database` - a Go API, migration Job and React frontend using
+* `examples/managed-database` - a Go API, migration Job and React frontend using
   a Kupe managed PostgreSQL database
-* `samples/registry` - build this app's image, push it to your tenant's Kupe
+* `examples/registry` - build this app's image, push it to your tenant's Kupe
   registry and run it on a connected cluster with no pull Secret
+* `examples/gitops` - run the game on dev, staging and prod clusters and promote
+  a release between them by pull request, with managed Argo CD
 
 ## Local development
 

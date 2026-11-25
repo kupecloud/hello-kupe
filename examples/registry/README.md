@@ -1,4 +1,4 @@
-# Registry sample
+# Registry example
 
 Build the hello-kupe image, push it to your tenant's Kupe registry, and run it
 on a connected cluster with no pull Secret. The image is the one at the root of

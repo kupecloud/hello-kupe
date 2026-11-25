@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/static"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/static"
 )
 
 const (

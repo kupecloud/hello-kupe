@@ -104,11 +104,11 @@ cluster, database, registry and bindings; the chart owns the workloads and route
 
 For the retained todo example, set `app_namespace = "todo-api"` and
 `migration_namespace = "todo-migrate"`, then follow its
-[walkthrough](../samples/managed-database/README.md).
+[walkthrough](../examples/managed-database/README.md).
 
 ## Moving an existing setup
 
-This configuration replaces `samples/managed-database/terraform/`. Resource
+This configuration replaces `examples/managed-database/terraform/`. Resource
 addresses and cluster/database names are unchanged. The namespace defaults now
 target the main game. Set `app_namespace = "todo-api"` and
 `migration_namespace = "todo-migrate"` to preserve existing todo bindings. If you previously applied it, move
@@ -133,5 +133,5 @@ protection and Terraform's `prevent_destroy` enabled. To intentionally remove it
 Deleting the registry permanently removes every image it contains.
 
 Destroying this configuration also destroys the cluster. See the app
-[cleanup instructions](../samples/managed-database/README.md#clean-up) for details
+[cleanup instructions](../examples/managed-database/README.md#clean-up) for details
 about migration Jobs and namespaces when retaining an existing cluster.

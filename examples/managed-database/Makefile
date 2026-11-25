@@ -1,4 +1,4 @@
-# Managed database sample Makefile
+# Managed database example Makefile
 
 GO ?= go
 GOCACHE ?= $(PWD)/.tmp/go-build

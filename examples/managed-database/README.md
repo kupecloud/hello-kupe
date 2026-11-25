@@ -1,4 +1,4 @@
-# Managed database sample
+# Managed database example
 
 A small todo app that keeps its data in a Kupe managed PostgreSQL database. It
 shows the parts most applications need: a schema migration, an API that reads
@@ -22,7 +22,7 @@ everything else to the frontend, so the browser calls the API on its own origin
 and the frontend needs no API address and no CORS.
 
 The API has no authentication. Anyone who can reach the hostname can read,
-change and delete every todo, so remove the sample when you have finished with
+change and delete every todo, so remove the example when you have finished with
 it (see [Clean up](#clean-up)) or keep it private, as described under
 [API](#api).
 
@@ -48,7 +48,7 @@ it (see [Clean up](#clean-up)) or keep it private, as described under
 
 With Terraform or OpenTofu, the repository-level [`infra/`](../../infra/README.md)
 configuration creates a cluster named `todo`, a database named `todo-db`, and
-both bindings. From this sample directory:
+both bindings. From this example directory:
 
 ```bash
 export KUPE_API_KEY=<api key>
@@ -119,7 +119,7 @@ The keys follow [servicebinding.io](https://servicebinding.io/): `type`,
 same details as one connection string, with `sslrootcert` set to
 `/bindings/<secret name>/ca.crt`. That is where the chart mounts each Secret
 (`SERVICE_BINDING_ROOT=/bindings`), so the path is correct whichever form an
-application reads. This sample reads the separate keys.
+application reads. This example reads the separate keys.
 
 Nothing is created in `todo-web`. That namespace has no binding.
 
@@ -145,7 +145,7 @@ Using your Kupe registry: push to `registry.kupe.cloud/<tenant>/todo-api` and
 `registry.kupe.cloud/<tenant>/todo-web` after `kupe registry login`, and connect
 the cluster once with `kupe registry connect <cluster>`. Every pod in the
 cluster then pulls from it with no pull Secret. The
-[registry sample](../registry/) walks through it.
+[registry example](../registry/) walks through it.
 
 ## 4. Deploy
 
@@ -242,7 +242,7 @@ spec:
   source:
     repoURL: https://github.com/kupecloud/hello-kupe.git
     targetRevision: main
-    path: samples/managed-database/chart
+    path: examples/managed-database/chart
     helm:
       releaseName: todo
       values: |
@@ -307,7 +307,7 @@ What the platform guarantees for this layout:
   nothing inside it can widen them: pods in `todo-web`, other namespaces and
   other clusters cannot connect.
 * **TLS is required.** The database rejects connections without TLS, and the
-  sample verifies the server certificate and host name against the CA in the
+  example verifies the server certificate and host name against the CA in the
   binding.
 * **Three roles, none a superuser.** `app_readwrite` can read and write rows in
   tables the owner creates, and `app_readonly` can only read them. Neither can
@@ -352,7 +352,7 @@ owner rotation uses the new password.
 
 ## Read-only access
 
-The sample does not need a read-only role, but a reporting job would. Bind
+The example does not need a read-only role, but a reporting job would. Bind
 `readonly` into a namespace of its own:
 
 ```bash
