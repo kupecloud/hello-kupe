@@ -1,4 +1,4 @@
-# Build from samples/managed-database:
+# Build from examples/managed-database:
 #   docker build -f Dockerfile.web -t <registry>/todo-web:<version> .
 #
 # The React app is compiled to static files and served by a small Go file

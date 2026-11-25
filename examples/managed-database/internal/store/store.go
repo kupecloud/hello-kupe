@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/api"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/api"
 )
 
 // listLimit bounds GET /api/todos so one request cannot read an unbounded table.

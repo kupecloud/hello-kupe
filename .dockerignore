@@ -9,4 +9,4 @@
 **/*.tfplan
 **/.env*
 hello-kupe
-samples
+examples

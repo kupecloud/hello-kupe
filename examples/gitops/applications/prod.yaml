@@ -1,0 +1,30 @@
+# Argo CD Application for the prod cluster. Replace <tenant> and the destination
+# name, then apply it to that cluster's argocd namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-kupe-prod
+  namespace: argocd
+spec:
+  project: <tenant>
+  source:
+    repoURL: https://github.com/kupecloud/hello-kupe.git
+    targetRevision: main
+    path: chart
+    helm:
+      releaseName: hello-kupe
+      valueFiles:
+        - ../examples/gitops/environments/prod.yaml
+      values: |
+        tenant: <tenant>
+        cluster: prod
+  destination:
+    # Copy the exact name from Argo CD: Settings, Clusters.
+    name: <tenant>--prod-<suffix>
+    namespace: hello-kupe
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

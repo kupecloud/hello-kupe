@@ -7,7 +7,7 @@
 # without a restart, and that it refuses a server certificate for the wrong
 # host or from the wrong CA. Everything it starts is removed on exit.
 #
-# Usage: scripts/local-smoke.sh   (from samples/managed-database)
+# Usage: scripts/local-smoke.sh   (from examples/managed-database)
 # Needs: docker, openssl, curl.
 set -euo pipefail
 

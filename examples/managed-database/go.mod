@@ -1,4 +1,4 @@
-module github.com/kupecloud/hello-kupe/samples/managed-database
+module github.com/kupecloud/hello-kupe/examples/managed-database
 
 go 1.26.11
 

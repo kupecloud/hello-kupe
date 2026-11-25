@@ -22,11 +22,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/api"
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/binding"
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/config"
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/migrate"
-	"github.com/kupecloud/hello-kupe/samples/managed-database/internal/store"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/api"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/binding"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/config"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/migrate"
+	"github.com/kupecloud/hello-kupe/examples/managed-database/internal/store"
 )
 
 // maxConns per API pod. Every connection counts against the role's

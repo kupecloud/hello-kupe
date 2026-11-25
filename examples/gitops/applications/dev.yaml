@@ -1,0 +1,30 @@
+# Argo CD Application for the dev cluster. Replace <tenant> and the destination
+# name, then apply it to that cluster's argocd namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hello-kupe-dev
+  namespace: argocd
+spec:
+  project: <tenant>
+  source:
+    repoURL: https://github.com/kupecloud/hello-kupe.git
+    targetRevision: main
+    path: chart
+    helm:
+      releaseName: hello-kupe
+      valueFiles:
+        - ../examples/gitops/environments/dev.yaml
+      values: |
+        tenant: <tenant>
+        cluster: dev
+  destination:
+    # Copy the exact name from Argo CD: Settings, Clusters.
+    name: <tenant>--dev-<suffix>
+    namespace: hello-kupe
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

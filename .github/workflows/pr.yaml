@@ -23,7 +23,7 @@ on:
       - "chart/**"
       - ".github/**"
       - "Makefile"
-      - "samples/**"
+      - "examples/**"
       - "web/**"
       - "infra/**"
       - "scripts/**"
@@ -67,10 +67,10 @@ jobs:
             context: .
             dockerfile: Dockerfile
           - name: managed-database api
-            context: samples/managed-database
+            context: examples/managed-database
             dockerfile: Dockerfile.api
           - name: managed-database web
-            context: samples/managed-database
+            context: examples/managed-database
             dockerfile: Dockerfile.web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

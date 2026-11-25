@@ -15,7 +15,7 @@
     - compose.yaml
     - .github/workflows/gates.yaml
     - scripts/kind.mjs
-    - samples/managed-database/scripts/local-smoke.sh
+    - examples/managed-database/scripts/local-smoke.sh
   reason: "Local PostgreSQL for docker compose, make kind-dev and the sample's local smoke test, and the CI service container for the Go tests; never deployed (Kupe runs the managed database)."
   reviewedBy: "bwalker"
   reviewedOn: "2026-11-05"
