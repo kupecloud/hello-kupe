@@ -862,7 +862,7 @@ export default function GameView({ embedded = false }: { embedded?: boolean }) {
           <footer>
             <div>
               <Mark small />
-              <span>Build something great.</span>
+              <span>Kubernetes. No assembly required.</span>
             </div>
             <span className="host-label">
               <span className="live-dot" />

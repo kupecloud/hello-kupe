@@ -25,6 +25,7 @@ describe("game presentation", () => {
     expect(html).toContain('class="intro"');
     expect(html).toContain("Open console");
     expect(html).toContain("<footer");
+    expect(html).toContain("<span>Kubernetes. No assembly required.</span>");
     expect(html).toContain("<dialog");
     expect(html).toContain('aria-label="Toggle dark mode"');
   });
