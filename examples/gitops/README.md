@@ -60,12 +60,13 @@ Argo CD, or run `kubectl get deploy,pods -n hello-kupe`.
 
 Say `dev` runs `1.9.2`, and `staging` and `prod` still run `1.9.1`.
 
-1. Change one line in `environments/staging.yaml`:
+1. Change one line in `environments/staging.yaml`. The tag carries the image
+   digest, so copy both from the release:
 
    ```diff
     image:
-   -  tag: "1.9.1"
-   +  tag: "1.9.2"
+   -  tag: "1.9.1@sha256:853e6a7141b82430e93c8298a5fc31016165d97b028c07940afdfdd8fd4d3d7a"
+   +  tag: "1.9.2@sha256:454c8109f69e1856cba8fb169f80f45b7b60aeb6aea0237dbbe52a11f3b60bed"
    ```
 
 2. Open a pull request, let your checks run against `dev`, and merge it.
@@ -79,9 +80,9 @@ To roll back, revert the commit. Argo CD puts the previous version back.
 ## Getting a new version into dev
 
 Argo CD deploys what is in Git. It does not watch your registry for new images.
-When your pipeline builds a release, have its last step commit the new tag to
-`environments/dev.yaml`, or open a pull request that does. From there the
-release moves forward the same way as every other change.
+When your pipeline builds a release, have its last step commit the new tag and
+digest to `environments/dev.yaml`, or open a pull request that does. From there
+the release moves forward the same way as every other change.
 
 ## Things to know
 
@@ -90,9 +91,11 @@ release moves forward the same way as every other change.
   Git. Make the change in Git.
 * **Deleting an `Application` leaves the workload running.** Delete the
   `hello-kupe` namespace as well if you want the game gone.
-* **Pin by digest for production.** These files use a plain tag so that the
-  change is easy to read. The chart's default value pins the image by tag and
-  digest, and a production setup should do the same.
+* **The tag includes the digest.** A Kupe cluster only runs a
+  `ghcr.io/kupecloud` image that is pinned by digest, so each environment file
+  holds `<version>@sha256:<digest>`. The chart's default value in
+  `chart/values.yaml` carries the newest release's. Pinning your own images the
+  same way means a tag that is moved later cannot change what runs.
 * **This runs the game in practice mode.** Scores are not kept. To add a
   database, see the [managed database example](../managed-database/) and the
   database values in the [root README](../../README.md#deploy-with-gitops).
