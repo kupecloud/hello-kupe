@@ -1,4 +1,4 @@
 # The version of Hello Kupe that the staging cluster runs.
-# To promote a release, change the tag here in a pull request.
+# To promote a release, change the tag and digest here in a pull request.
 image:
-  tag: "1.9.2"
+  tag: "1.9.2@sha256:454c8109f69e1856cba8fb169f80f45b7b60aeb6aea0237dbbe52a11f3b60bed"
