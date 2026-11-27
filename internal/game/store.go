@@ -120,11 +120,11 @@ func Open(ctx context.Context, uri string, password func() (string, error)) (*Po
 }
 func (p *Postgres) Close()           { p.pool.Close() }
 func (p *Postgres) Persistent() bool { return true }
-func (p *Postgres) Ping(ctx context.Context) error {
-	var exists bool
-	// Readiness also confirms migrations have created the application table.
-	return p.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM kupe_games LIMIT 1)").Scan(&exists)
-}
+
+// Ping checks a connection can be acquired and the server answers. It does not
+// check the schema: a platform that runs no migration Job would otherwise keep
+// the pod unready, and its rollout failing, until someone migrates by hand.
+func (p *Postgres) Ping(ctx context.Context) error { return p.pool.Ping(ctx) }
 func (p *Postgres) Create(ctx context.Context, id string, s State) error {
 	raw, err := json.Marshal(s)
 	if err != nil {
