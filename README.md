@@ -147,6 +147,12 @@ The bindings must be ready before Argo CD syncs. The owner binding belongs only
 in the migration namespace; the application uses the readwrite binding. To try
 unreleased code, build and override the image as described in the walkthrough.
 
+Readiness checks only that the database answers, not that the migrations have
+run, so a pod connected to an unmigrated database, such as a Kupe App
+environment's connection (Kupe Apps run no migration Job), still becomes ready.
+Its game requests then fail with `relation "kupe_games" does not exist` in the
+log until `hello-kupe migrate` runs with the owner credential.
+
 Then open the app:
 
 ```text
@@ -218,7 +224,7 @@ no synthetic background requests or errors are generated.
 | `/api/leaderboard` | Top ten results, ranked by moves then completion time |
 | `/api/hello` | Service, tenant and pod information as JSON |
 | `/api/work?ms=N` | burns roughly N milliseconds of CPU (default 50, capped at 1000) |
-| `/healthz`, `/readyz` | probes |
+| `/healthz`, `/readyz` | probes: `/healthz` answers while the process runs; `/readyz` also needs the database, when one is configured, to accept a connection within 2 seconds. It does not check the schema |
 | `/metrics` | Prometheus metrics, scraped automatically |
 
 ## Autoscaling

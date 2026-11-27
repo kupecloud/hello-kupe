@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -101,5 +102,34 @@ func TestPostgresPersistence(t *testing.T) {
 	}
 	if _, err = first.pool.Exec(ctx, "CREATE TABLE must_not_be_created (id int)"); err == nil {
 		t.Fatal("readwrite role can create tables")
+	}
+}
+
+// Readiness must not depend on the schema: a Kupe App connection delivers an
+// unmigrated database, and a Ping that needs kupe_games kept the pod unready
+// (kupe-control-operator#943). A search_path naming no schema hides the table.
+func TestPostgresPingWithoutSchema(t *testing.T) {
+	uri := os.Getenv("TEST_DATABASE_URL")
+	if uri == "" {
+		t.Skip("set TEST_DATABASE_URL for PostgreSQL integration")
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := u.Query()
+	query.Set("search_path", "hello_kupe_unmigrated")
+	u.RawQuery = query.Encode()
+	ctx := context.Background()
+	store, err := Open(ctx, u.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err = store.Scores(ctx); err == nil {
+		t.Fatal("kupe_games is visible; the test cannot show Ping ignores the schema")
+	}
+	if err = store.Ping(ctx); err != nil {
+		t.Fatalf("Ping without the schema = %v, want nil", err)
 	}
 }
